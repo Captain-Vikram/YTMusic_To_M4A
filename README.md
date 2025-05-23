@@ -19,8 +19,8 @@ A Python tool to download music from YouTube/YouTube Music with proper metadata 
 
 1. Clone the repository
 ```bash
-git clone https://github.com/yourusername/youtube-music-extractor.git
-cd youtube-music-extractor
+git clone https://github.com/yourusername/YTMusic_To_M4A.git
+cd YTMusic_To_M4A
 ```
 
 2. Create and activate a virtual environment (optional but recommended)
