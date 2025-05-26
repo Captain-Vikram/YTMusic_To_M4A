@@ -1,5 +1,12 @@
+<<<<<<< HEAD
 yt-dlp>=2023.3.4
 moviepy>=1.0.3
 mutagen>=1.46.0
 pillow>=9.4.0
+=======
+yt-dlp>=2023.3.4
+moviepy>=1.0.3
+mutagen>=1.46.0
+pillow>=9.4.0
+>>>>>>> dffb2943c5a8ed034ec6fe1dd6e983517720a717
 requests>=2.28.2

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -31,4 +32,39 @@ temp_cover.jpg
 
 # OS-specific files
 .DS_Store
+=======
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Downloaded files and output files
+*.webm
+*.mp3
+*.webp
+temp_cover.jpg
+
+# Keep audio files in album directories
+!*/*.m4a
+!*/cover.jpg
+
+# IDE-specific files
+.idea/
+.vscode/
+*.swp
+
+# OS-specific files
+.DS_Store
+>>>>>>> dffb2943c5a8ed034ec6fe1dd6e983517720a717
 Thumbs.db
