@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 # YouTube Music Extractor
 
 A Python tool to download music from YouTube/YouTube Music with proper metadata and album art, featuring parallel processing for albums and playlists.
@@ -352,5 +352,4 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduc
 - Enhanced image processing with 1:1 aspect ratio cropping
 - Automatic cleanup of temporary files
 - Better error handling and progress tracking
->>>>>>> dffb2943c5a8ed034ec6fe1dd6e983517720a717
 - VLC-optimized output with external cover art files
