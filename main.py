@@ -216,286 +216,293 @@ def process_single_track(entry, album_folder, cover_art_path, album_title, track
         print(f"❌ Fatal error processing {track_info if 'track_info' in locals() else 'track'}: {e}")
         return False
 
-try:
-    url = input("Enter the YouTube URL: ")
-except KeyboardInterrupt:
-    print("\nExiting...")
-    exit()
-
-# First, extract info to determine if it's a playlist/album
-print("Analyzing URL...")
-ydl_opts_info = {
-    'quiet': True,
-    'no_warnings': True,
-}
-
-with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+def main():
+    """Entry point for the console script."""
     try:
-        info = ydl.extract_info(url, download=False)
-    except Exception as e:
-        print(f"Error extracting info: {e}")
+        url = input("Enter the YouTube URL: ")
+    except KeyboardInterrupt:
+        print("\nExiting...")
         exit()
 
-# Check if it's a playlist/album
-is_playlist = '_type' in info and info['_type'] == 'playlist'
+    # First, extract info to determine if it's a playlist/album
+    print("Analyzing URL...")
+    ydl_opts_info = {
+        'quiet': True,
+        'no_warnings': True,
+    }
 
-if is_playlist:
-    print(f"🎵 Detected album/playlist: {info.get('title', 'Unknown Album')}")
-    print(f"📀 Found {len(info.get('entries', []))} tracks")
-    
-    # Create album folder
-    album_title = sanitize_filename(info.get('title', 'Unknown Album'))
-    album_folder = album_title
-    if not os.path.exists(album_folder):
-        os.makedirs(album_folder)
-        print(f"📁 Created album folder: {album_folder}")
-    
-    # Download all tracks directly to album folder
-    output_template = os.path.join(album_folder, "%(title)s.%(ext)s")
-else:
-    print(f"🎵 Detected single track: {info.get('title', 'Unknown')}")
-    # Create folder for single track too for better organization
-    track_title = sanitize_filename(info.get('title', 'Unknown'))
-    album_folder = f"Single - {track_title}"
-    album_title = track_title
-    if not os.path.exists(album_folder):
-        os.makedirs(album_folder)
-        print(f"📁 Created track folder: {album_folder}")
-    output_template = os.path.join(album_folder, "%(title)s.%(ext)s")
-
-# Download with yt-dlp
-print("⬇️ Starting download...")
-ydl_opts = {
-    'format': 'bestaudio/best',
-    'outtmpl': output_template,
-    'writeinfojson': False,  # Don't need JSON files
-    'writethumbnail': True,
-}
-
-with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-    result = ydl.extract_info(url, download=True)
-
-print("✅ Download completed!")
-
-# Handle cover art download and processing
-print("🎨 Processing cover art...")
-cover_art_path = None
-
-if is_playlist:
-    # For playlists, try to get album artwork
-    playlist_title = sanitize_filename(result.get('title', 'Unknown Album'))
-    possible_thumbnails = [
-        os.path.join(album_folder, f"{playlist_title}.jpg"),
-        os.path.join(album_folder, f"{playlist_title}.webp"), 
-        os.path.join(album_folder, f"{playlist_title}.png"),
-        f"{playlist_title}.jpg",  # Also check main directory
-        f"{playlist_title}.webp", 
-        f"{playlist_title}.png"
-    ]
-    
-    # Try to download from thumbnail URL if available
-    thumbnail_url = result.get("thumbnail")
-    if thumbnail_url:
-        print(f"📥 Downloading album artwork...")
+    with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
         try:
-            response = requests.get(thumbnail_url, timeout=10)
-            response.raise_for_status()
-            img_data = response.content
-            temp_cover_path = "temp_cover.jpg"
-            with open(temp_cover_path, "wb") as handler:
-                handler.write(img_data)
-            
-            cover_art_path = process_cover_art(temp_cover_path, os.path.join(album_folder, "cover.jpg"))
-            if os.path.exists(temp_cover_path):
-                os.remove(temp_cover_path)
-            print("✅ Album artwork processed")
+            info = ydl.extract_info(url, download=False)
         except Exception as e:
-            print(f"❌ Error downloading album artwork: {e}")
-    
-    # If direct download failed, look for yt-dlp generated thumbnails
-    if not cover_art_path:
-        for possible_thumb in possible_thumbnails:
-            if os.path.exists(possible_thumb):
-                print(f"📷 Using yt-dlp generated album artwork: {os.path.basename(possible_thumb)}")
-                cover_art_path = process_cover_art(possible_thumb, os.path.join(album_folder, "cover.jpg"))
-                break
-                
-    # REMOVE THIS PART - it's trying to convert the album title as a file
-    # Converting Album - Priceless.None to Album - Priceless.m4a...
-    
-    # Process tracks in parallel
-    entries = [entry for entry in result.get('entries', []) if entry]  # Filter out None entries
-    total_tracks = len(entries)
-    
-    if entries:
-        print(f"\n🚀 Starting parallel processing of {total_tracks} tracks...")
+            print(f"Error extracting info: {e}")
+            exit()
+
+    # Check if it's a playlist/album
+    is_playlist = '_type' in info and info['_type'] == 'playlist'
+
+    if is_playlist:
+        print(f"🎵 Detected album/playlist: {info.get('title', 'Unknown Album')}")
+        print(f"📀 Found {len(info.get('entries', []))} tracks")
         
-        # Use ThreadPoolExecutor for parallel processing
-        max_workers = min(4, total_tracks)  # Limit to 4 concurrent threads to avoid overwhelming the system
-        successful_tracks = 0
+        # Create album folder
+        album_title = sanitize_filename(info.get('title', 'Unknown Album'))
+        album_folder = album_title
+        if not os.path.exists(album_folder):
+            os.makedirs(album_folder)
+            print(f"📁 Created album folder: {album_folder}")
         
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all tasks
-            future_to_track = {
-                executor.submit(
-                    process_single_track, 
-                    entry, 
-                    album_folder, 
-                    cover_art_path, 
-                    album_title, 
-                    i + 1, 
-                    total_tracks
-                ): (i + 1, entry.get('title', 'Unknown'))
-                for i, entry in enumerate(entries)
-            }
-            
-            # Process completed tasks
-            for future in as_completed(future_to_track):
-                track_num, track_title = future_to_track[future]
-                try:
-                    success = future.result()
-                    if success:
-                        successful_tracks += 1
-                    print(f"📊 Progress: {successful_tracks}/{total_tracks} tracks completed")
-                except Exception as e:
-                    print(f"❌ Track {track_num} ({track_title}) failed: {e}")
-        
-        print(f"\n🎉 Parallel processing completed! {successful_tracks}/{total_tracks} tracks processed successfully")
-    
-else:
-    # Single track processing
-    title = sanitize_filename(result.get("title", "Unknown"))
-    thumbnail_url = result.get("thumbnail")
-    
-    # Download and process cover art
-    if thumbnail_url:
-        print(f"📥 Downloading thumbnail...")
-        try:
-            response = requests.get(thumbnail_url, timeout=10)
-            response.raise_for_status()
-            img_data = response.content
-            temp_cover_path = "temp_cover.jpg"
-            with open(temp_cover_path, "wb") as handler:
-                handler.write(img_data)
-            
-            # Save cover art to the single track folder, not main directory
-            cover_art_path = process_cover_art(temp_cover_path, os.path.join(album_folder, "cover.jpg"))
-            if os.path.exists(temp_cover_path):
-                os.remove(temp_cover_path)
-            print("✅ Thumbnail processed")
-        except Exception as e:
-            print(f"❌ Error downloading thumbnail: {e}")
-    
-    # Look for yt-dlp generated thumbnails if direct download failed
-    if not cover_art_path:
-        # Check both main directory and album folder for thumbnails
-        possible_thumbnails = [
-            os.path.join(album_folder, f"{title}.jpg"),
-            os.path.join(album_folder, f"{title}.webp"), 
-            os.path.join(album_folder, f"{title}.png"),
-            f"{title}.jpg",  # Also check main directory
-            f"{title}.webp", 
-            f"{title}.png"
-        ]
-        for possible_thumb in possible_thumbnails:
-            if os.path.exists(possible_thumb):
-                print(f"📷 Using yt-dlp generated thumbnail: {os.path.basename(possible_thumb)}")
-                cover_art_path = process_cover_art(possible_thumb, os.path.join(album_folder, "cover.jpg"))
-                break
-    
-    # Process the single track - PASS album_folder instead of None
-    print("\n🎵 Processing single track...")
-    success = process_single_track(result, album_folder, cover_art_path, album_title)
-    if success:
-        print("✅ Single track processed successfully!")
+        # Download all tracks directly to album folder
+        output_template = os.path.join(album_folder, "%(title)s.%(ext)s")
     else:
-        print("❌ Failed to process single track")
+        print(f"🎵 Detected single track: {info.get('title', 'Unknown')}")
+        # Create folder for single track too for better organization
+        track_title = sanitize_filename(info.get('title', 'Unknown'))
+        album_folder = f"Single - {track_title}"
+        album_title = track_title
+        if not os.path.exists(album_folder):
+            os.makedirs(album_folder)
+            print(f"📁 Created track folder: {album_folder}")
+        output_template = os.path.join(album_folder, "%(title)s.%(ext)s")
 
-# Cleanup temporary files
-print("\n🧹 Cleaning up temporary files...")
+    # Download with yt-dlp
+    print("⬇️ Starting download...")
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': output_template,
+        'writeinfojson': False,  # Don't need JSON files
+        'writethumbnail': True,
+    }
 
-def cleanup_directory(directory_path, is_main_dir=True):
-    """Clean up temporary files in a specific directory"""
-    deleted_count = 0
-    
-    try:
-        if not os.path.exists(directory_path):
-            return 0
-            
-        files_in_dir = os.listdir(directory_path)
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        result = ydl.extract_info(url, download=True)
+
+    print("✅ Download completed!")
+
+    # Handle cover art download and processing
+    print("🎨 Processing cover art...")
+    cover_art_path = None
+
+    if is_playlist:
+        # For playlists, try to get album artwork
+        playlist_title = sanitize_filename(result.get('title', 'Unknown Album'))
+        possible_thumbnails = [
+            os.path.join(album_folder, f"{playlist_title}.jpg"),
+            os.path.join(album_folder, f"{playlist_title}.webp"), 
+            os.path.join(album_folder, f"{playlist_title}.png"),
+            f"{playlist_title}.jpg",  # Also check main directory
+            f"{playlist_title}.webp", 
+            f"{playlist_title}.png"
+        ]
         
-        # File extensions to keep (project files) - only for main directory
-        keep_extensions = {'.py', '.md', '.txt', '.json', '.gitignore'}
+        # Try to download from thumbnail URL if available
+        thumbnail_url = result.get("thumbnail")
+        if thumbnail_url:
+            print(f"📥 Downloading album artwork...")
+            try:
+                response = requests.get(thumbnail_url, timeout=10)
+                response.raise_for_status()
+                img_data = response.content
+                temp_cover_path = "temp_cover.jpg"
+                with open(temp_cover_path, "wb") as handler:
+                    handler.write(img_data)
+                
+                cover_art_path = process_cover_art(temp_cover_path, os.path.join(album_folder, "cover.jpg"))
+                if os.path.exists(temp_cover_path):
+                    os.remove(temp_cover_path)
+                print("✅ Album artwork processed")
+            except Exception as e:
+                print(f"❌ Error downloading album artwork: {e}")
         
-        # Specific important files to keep regardless of extension - only for main directory
-        important_files = {'LICENSE', 'setup.py', 'requirements.txt', '.gitignore', 'config.py'}
+        # If direct download failed, look for yt-dlp generated thumbnails
+        if not cover_art_path:
+            for possible_thumb in possible_thumbnails:
+                if os.path.exists(possible_thumb):
+                    print(f"📷 Using yt-dlp generated album artwork: {os.path.basename(possible_thumb)}")
+                    cover_art_path = process_cover_art(possible_thumb, os.path.join(album_folder, "cover.jpg"))
+                    break
+                
+        # REMOVE THIS PART - it's trying to convert the album title as a file
+        # Converting Album - Priceless.None to Album - Priceless.m4a...
         
-        for file in files_in_dir:
-            file_path = os.path.join(directory_path, file)
+        # Process tracks in parallel
+        entries = [entry for entry in result.get('entries', []) if entry]  # Filter out None entries
+        total_tracks = len(entries)
+        
+        if entries:
+            print(f"\n🚀 Starting parallel processing of {total_tracks} tracks...")
             
-            # Skip directories
-            if os.path.isdir(file_path):
-                continue
+            # Use ThreadPoolExecutor for parallel processing
+            max_workers = min(4, total_tracks)  # Limit to 4 concurrent threads to avoid overwhelming the system
+            successful_tracks = 0
             
-            # Get file extension
-            _, ext = os.path.splitext(file)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all tasks
+                future_to_track = {
+                    executor.submit(
+                        process_single_track, 
+                        entry, 
+                        album_folder, 
+                        cover_art_path, 
+                        album_title, 
+                        i + 1, 
+                        total_tracks
+                    ): (i + 1, entry.get('title', 'Unknown'))
+                    for i, entry in enumerate(entries)
+                }
+                
+                # Process completed tasks
+                for future in as_completed(future_to_track):
+                    track_num, track_title = future_to_track[future]
+                    try:
+                        success = future.result()
+                        if success:
+                            successful_tracks += 1
+                        print(f"📊 Progress: {successful_tracks}/{total_tracks} tracks completed")
+                    except Exception as e:
+                        print(f"❌ Track {track_num} ({track_title}) failed: {e}")
             
-            should_delete = False
+            print(f"\n🎉 Parallel processing completed! {successful_tracks}/{total_tracks} tracks processed successfully")
+        
+    else:
+        # Single track processing
+        title = sanitize_filename(result.get("title", "Unknown"))
+        thumbnail_url = result.get("thumbnail")
+        
+        # Download and process cover art
+        if thumbnail_url:
+            print(f"📥 Downloading thumbnail...")
+            try:
+                response = requests.get(thumbnail_url, timeout=10)
+                response.raise_for_status()
+                img_data = response.content
+                temp_cover_path = "temp_cover.jpg"
+                with open(temp_cover_path, "wb") as handler:
+                    handler.write(img_data)
+                
+                # Save cover art to the single track folder, not main directory
+                cover_art_path = process_cover_art(temp_cover_path, os.path.join(album_folder, "cover.jpg"))
+                if os.path.exists(temp_cover_path):
+                    os.remove(temp_cover_path)
+                print("✅ Thumbnail processed")
+            except Exception as e:
+                print(f"❌ Error downloading thumbnail: {e}")
+        
+        # Look for yt-dlp generated thumbnails if direct download failed
+        if not cover_art_path:
+            # Check both main directory and album folder for thumbnails
+            possible_thumbnails = [
+                os.path.join(album_folder, f"{title}.jpg"),
+                os.path.join(album_folder, f"{title}.webp"), 
+                os.path.join(album_folder, f"{title}.png"),
+                f"{title}.jpg",  # Also check main directory
+                f"{title}.webp", 
+                f"{title}.png"
+            ]
+            for possible_thumb in possible_thumbnails:
+                if os.path.exists(possible_thumb):
+                    print(f"📷 Using yt-dlp generated thumbnail: {os.path.basename(possible_thumb)}")
+                    cover_art_path = process_cover_art(possible_thumb, os.path.join(album_folder, "cover.jpg"))
+                    break
+        
+        # Process the single track - PASS album_folder instead of None
+        print("\n🎵 Processing single track...")
+        success = process_single_track(result, album_folder, cover_art_path, album_title)
+        if success:
+            print("✅ Single track processed successfully!")
+        else:
+            print("❌ Failed to process single track")
+
+    # Cleanup temporary files
+    print("\n🧹 Cleaning up temporary files...")
+
+    def cleanup_directory(directory_path, is_main_dir=True):
+        """Clean up temporary files in a specific directory"""
+        deleted_count = 0
+        
+        try:
+            if not os.path.exists(directory_path):
+                return 0
+                
+            files_in_dir = os.listdir(directory_path)
             
-            # In main directory - keep important project files
-            if is_main_dir:
-                # Explicitly check for .gitignore
-                if file == '.gitignore' or file in important_files or ext.lower() in keep_extensions:
+            # File extensions to keep (project files) - only for main directory
+            keep_extensions = {'.py', '.md', '.txt', '.json', '.gitignore'}
+            
+            # Specific important files to keep regardless of extension - only for main directory
+            important_files = {'LICENSE', 'setup.py', 'requirements.txt', '.gitignore', 'config.py'}
+            
+            for file in files_in_dir:
+                file_path = os.path.join(directory_path, file)
+                
+                # Skip directories
+                if os.path.isdir(file_path):
                     continue
-                    
-                # Delete everything else in main directory (all temp files, audio files, images)
-                should_delete = True
-                    
-            else:
-                # In album/track folder - ONLY keep .m4a files and cover.jpg
-                if file.endswith('.m4a') or file == 'cover.jpg':
-                    continue  # Keep these files
+                
+                # Get file extension
+                _, ext = os.path.splitext(file)
+                
+                should_delete = False
+                
+                # In main directory - keep important project files
+                if is_main_dir:
+                    # Explicitly check for .gitignore
+                    if file == '.gitignore' or file in important_files or ext.lower() in keep_extensions:
+                        continue
+                        
+                    # Delete everything else in main directory (all temp files, audio files, images)
+                    should_delete = True
+                        
                 else:
-                    should_delete = True  # Delete everything else
-            
-            if should_delete:
-                try:
-                    os.remove(file_path)
-                    print(f"🗑️ Removed: {file}")
-                    deleted_count += 1
-                except Exception as e:
-                    print(f"⚠️ Could not remove {file}: {e}")
-    
+                    # In album/track folder - ONLY keep .m4a files and cover.jpg
+                    if file.endswith('.m4a') or file == 'cover.jpg':
+                        continue  # Keep these files
+                    else:
+                        should_delete = True  # Delete everything else
+                
+                if should_delete:
+                    try:
+                        os.remove(file_path)
+                        print(f"🗑️ Removed: {file}")
+                        deleted_count += 1
+                    except Exception as e:
+                        print(f"⚠️ Could not remove {file}: {e}")
+        
+        except Exception as e:
+            print(f"❌ Error cleaning directory {directory_path}: {e}")
+        
+        return deleted_count
+
+    try:
+        total_deleted = 0
+        
+        # Clean main directory
+        print("🧹 Cleaning main directory...")
+        total_deleted += cleanup_directory('.', is_main_dir=True)
+        
+        # Clean album/track folder if it exists
+        if album_folder and os.path.exists(album_folder):
+            print(f"🧹 Cleaning {album_folder} folder...")
+            total_deleted += cleanup_directory(album_folder, is_main_dir=False)
+        
+        print(f"✅ Cleanup complete: {total_deleted} temporary files removed")
+        
     except Exception as e:
-        print(f"❌ Error cleaning directory {directory_path}: {e}")
-    
-    return deleted_count
+        print(f"❌ Error during cleanup: {e}")
 
-try:
-    total_deleted = 0
-    
-    # Clean main directory
-    print("🧹 Cleaning main directory...")
-    total_deleted += cleanup_directory('.', is_main_dir=True)
-    
-    # Clean album/track folder if it exists
-    if album_folder and os.path.exists(album_folder):
-        print(f"🧹 Cleaning {album_folder} folder...")
-        total_deleted += cleanup_directory(album_folder, is_main_dir=False)
-    
-    print(f"✅ Cleanup complete: {total_deleted} temporary files removed")
-    
-except Exception as e:
-    print(f"❌ Error during cleanup: {e}")
+    print("\n" + "="*60)
+    if is_playlist:
+        print(f"🎉 Album '{album_title}' downloaded successfully!")
+        print(f"📁 All tracks saved in folder: {album_folder}")
+        print(f"🎵 {len([f for f in os.listdir(album_folder) if f.endswith('.m4a')])} M4A files ready")
+    else:
+        print("🎉 Single track downloaded with full metadata and album art!")
 
-print("\n" + "="*60)
-if is_playlist:
-    print(f"🎉 Album '{album_title}' downloaded successfully!")
-    print(f"📁 All tracks saved in folder: {album_folder}")
-    print(f"🎵 {len([f for f in os.listdir(album_folder) if f.endswith('.m4a')])} M4A files ready")
-else:
-    print("🎉 Single track downloaded with full metadata and album art!")
+    print("🎵 All files ready for VLC and other media players!")
+    print("="*60)
+    print("\nThank you for using YouTube Music Extractor! 🎶")
 
-print("🎵 All files ready for VLC and other media players!")
-print("="*60)
-print("\nThank you for using YouTube Music Extractor! 🎶")
+if __name__ == "__main__":
+    # When run directly, execute all the existing code
+    main()
+
