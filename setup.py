@@ -14,7 +14,7 @@ setup(
     description="Download music from YouTube with proper metadata and album art",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/youtube-music-extractor",  # Replace with your GitHub repo
+    url="https://github.com/Captain-Vikram/YTMusic_To_M4A.git",  # Replace with your GitHub repo
     packages=find_packages(),
     py_modules=["main", "config"],
     install_requires=requirements,
