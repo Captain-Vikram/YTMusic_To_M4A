@@ -68,82 +68,92 @@ def process_single_track(entry, album_folder, cover_art_path, album_title, track
         track_info = f"Track {track_num}/{total_tracks}: {title}" if track_num else title
         print(f"🎵 Starting {track_info}")
         
-        # Find the downloaded audio file
+        # Find the downloaded audio file - be more flexible with filename matching
         possible_extensions = ['webm', 'mp4', 'm4a', 'opus']
         original_filename = None
         
-        # Construct the expected filename based on download pattern
-        expected_filename = None
+        # Search for files that start with the title (handles slight filename variations)
+        search_locations = ['.']
         if album_folder:
-            # For albums, file should be in album folder
-            expected_filename = os.path.join(album_folder, f"{title}.webm")
-        else:
-            # For single tracks, file should be in main directory
-            expected_filename = f"{title}.webm"
+            search_locations.append(album_folder)
         
-        # First try the expected location
-        if os.path.exists(expected_filename):
-            original_filename = expected_filename
-        else:
-            # Fallback: search in both locations with all extensions
-            search_locations = ['.']
-            if album_folder:
-                search_locations.append(album_folder)
-            
-            for location in search_locations:
-                for ext in possible_extensions:
-                    potential_file = os.path.join(location, f"{title}.{ext}")
-                    if os.path.exists(potential_file):
-                        original_filename = potential_file
-                        break
-                if original_filename:
+        for location in search_locations:
+            if not os.path.exists(location):
+                continue
+                
+            for file in os.listdir(location):
+                # Check if file starts with our title and has a valid audio extension
+                file_base, file_ext = os.path.splitext(file)
+                if (file_base.startswith(title) or title.startswith(file_base)) and file_ext[1:] in possible_extensions:
+                    original_filename = os.path.join(location, file)
+                    print(f"🔍 Found audio file: {original_filename}")
                     break
+            
+            if original_filename:
+                break
         
         if not original_filename:
             print(f"⚠️ Warning: Could not find audio file for {title}")
+            # List available files for debugging
+            print("Available files in current directory:")
+            for file in os.listdir('.'):
+                if any(file.endswith(ext) for ext in possible_extensions):
+                    print(f"  - {file}")
+            if album_folder and os.path.exists(album_folder):
+                print(f"Available files in {album_folder}:")
+                for file in os.listdir(album_folder):
+                    if any(file.endswith(ext) for ext in possible_extensions):
+                        print(f"  - {file}")
             return False
         
         # Ensure album folder exists
         if album_folder and not os.path.exists(album_folder):
             os.makedirs(album_folder, exist_ok=True)
-          # Set output path - always in album folder if it's an album
+            
+        # Set output path - always in album folder if it's an album
+        # Use the original filename's base name to maintain consistency
+        original_base = os.path.splitext(os.path.basename(original_filename))[0]
         if album_folder:
-            output_filename = os.path.join(album_folder, f"{title}.m4a")
+            output_filename = os.path.join(album_folder, f"{original_base}.m4a")
         else:
-            output_filename = f"{title}.m4a"
+            output_filename = f"{original_base}.m4a"
+        
+        print(f"📁 Input: {original_filename}")
+        print(f"📁 Output: {output_filename}")
         
         # Convert audio to m4a
         print(f"🔄 Converting {track_info}...")
         try:
-            audio_clip = AudioFileClip(original_filename)
-            # Write audio file without verbose parameter for compatibility
-            audio_clip.write_audiofile(
-                output_filename, 
-                codec='aac', 
-                bitrate='256k', 
-                logger=None
-            )
-            audio_clip.close()
-              # Delete the original file after successful conversion
-            if os.path.exists(original_filename):
-                os.remove(original_filename)
+            # Check if the file is already M4A and just needs to be kept
+            if original_filename.lower().endswith('.m4a'):
+                print(f"✅ File is already M4A format, no conversion needed")
+                # Just use the original file as output
+                output_filename = original_filename
+            else:
+                # Convert to M4A
+                audio_clip = AudioFileClip(original_filename)
+                # Write audio file without verbose parameter for compatibility
+                audio_clip.write_audiofile(
+                    output_filename, 
+                    codec='aac', 
+                    bitrate='256k', 
+                    logger=None
+                )
+                audio_clip.close()
+                
+                # Delete the original file after successful conversion
+                if os.path.exists(original_filename):
+                    os.remove(original_filename)
+                    print(f"🗑️ Removed original file: {original_filename}")
+            
             print(f"✅ Converted {track_info}")
         except Exception as e:
             print(f"❌ Error converting {track_info}: {e}")
             # If conversion failed, check if we can work with the original file
             if original_filename.lower().endswith('.m4a') and os.path.exists(original_filename):
-                # It's already M4A, just move/copy it
-                if album_folder and original_filename != output_filename:
-                    try:
-                        if os.path.dirname(original_filename) != album_folder:
-                            shutil.move(original_filename, output_filename)
-                        else:
-                            output_filename = original_filename
-                    except Exception as move_e:
-                        print(f"⚠️ Could not move {original_filename}: {move_e}")
-                        output_filename = original_filename
-                else:
-                    output_filename = original_filename
+                # It's already M4A, just use it
+                output_filename = original_filename
+                print(f"✅ Using original M4A file: {output_filename}")
             else:
                 # Move original file to album folder if conversion failed
                 if album_folder and original_filename != output_filename:
@@ -154,19 +164,27 @@ def process_single_track(entry, album_folder, cover_art_path, album_title, track
                         output_filename = target_path
                     except Exception as move_e:
                         print(f"⚠️ Could not move {original_filename}: {move_e}")
-                        output_filename = original_filename                # Skip metadata for non-M4A files
+                        output_filename = original_filename
+                        
+                # Skip metadata for non-M4A files
                 if not output_filename.lower().endswith('.m4a'):
                     print(f"⚠️ Skipping metadata for non-M4A file: {output_filename}")
                     return True  # Still consider it successful since we have the audio file
+
+        # Verify the output file exists before adding metadata
+        if not os.path.exists(output_filename):
+            print(f"⚠️ Output file does not exist after conversion: {output_filename}")
+            print(f"🔍 Checking if original file still exists: {os.path.exists(original_filename)}")
+            # List files in the album folder for debugging
+            if album_folder and os.path.exists(album_folder):
+                print(f"📂 Files in {album_folder}:")
+                for file in os.listdir(album_folder):
+                    print(f"  - {file}")
+            return False
         
         # Add metadata and cover art
         print(f"🏷️ Adding metadata to {track_info}...")
         try:
-            # Check if the file exists and is a valid M4A file
-            if not os.path.exists(output_filename):
-                print(f"⚠️ Output file does not exist: {output_filename}")
-                return False
-            
             # Verify it's an M4A file by checking extension
             if not output_filename.lower().endswith('.m4a'):
                 print(f"⚠️ File is not M4A format: {output_filename}")
@@ -179,7 +197,7 @@ def process_single_track(entry, album_folder, cover_art_path, album_title, track
                 if key.startswith('\xa9') or key in ['covr']:
                     del audio[key]
             
-            audio['\xa9nam'] = [title]  # Title
+            audio['\xa9nam'] = [original_base]  # Use original filename for title
             audio['\xa9ART'] = [artist]  # Artist
             audio['\xa9alb'] = [album_title]  # Album
             audio['\xa9gen'] = [genre]  # Genre
@@ -220,6 +238,16 @@ def main():
     """Entry point for the console script."""
     try:
         url = input("Enter the YouTube URL: ")
+        
+        # Ask if user wants to check available formats
+        check_formats = input("Check available audio formats first? (y/n): ").lower().strip()
+        if check_formats == 'y':
+            check_available_formats(url)
+            proceed = input("\nProceed with download? (y/n): ").lower().strip()
+            if proceed != 'y':
+                print("Download cancelled.")
+                return
+                
     except KeyboardInterrupt:
         print("\nExiting...")
         exit()
@@ -265,18 +293,42 @@ def main():
             print(f"📁 Created track folder: {album_folder}")
         output_template = os.path.join(album_folder, "%(title)s.%(ext)s")
 
-    # Download with yt-dlp
+    # Download with yt-dlp - Enhanced for highest quality
     print("⬇️ Starting download...")
     ydl_opts = {
-        'format': 'bestaudio/best',
+        # Enhanced format selection for highest quality audio
+        'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio[ext=opus]/bestaudio/best',
         'outtmpl': output_template,
-        'writeinfojson': False,  # Don't need JSON files
+        'writeinfojson': True,  # Enable to check quality info
         'writethumbnail': True,
+        # Add quality verification
+        'extract_flat': False,
+        'listformats': False,  # Set to True temporarily to see available formats
     }
+
+    # Optional: Print available formats for quality verification
+    print("🔍 Checking available audio formats...")
+    ydl_opts_check = {
+        'listformats': True,
+        'quiet': False,
+    }
+    
+    # Uncomment these lines to see all available formats:
+    # with yt_dlp.YoutubeDL(ydl_opts_check) as ydl_check:
+    #     ydl_check.extract_info(url, download=False)
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         result = ydl.extract_info(url, download=True)
-
+        
+        # Check what format was actually downloaded
+        if is_playlist:
+            for entry in result.get('entries', []):
+                if entry and 'format' in entry:
+                    print(f"📊 Downloaded format for '{entry.get('title', 'Unknown')}': {entry.get('format_id', 'Unknown')} - {entry.get('ext', 'Unknown')} - {entry.get('abr', 'Unknown')}kbps")
+        else:
+            if 'format' in result:
+                print(f"📊 Downloaded format: {result.get('format_id', 'Unknown')} - {result.get('ext', 'Unknown')} - {result.get('abr', 'Unknown')}kbps")
+        
     print("✅ Download completed!")
 
     # Handle cover art download and processing
@@ -321,9 +373,6 @@ def main():
                     print(f"📷 Using yt-dlp generated album artwork: {os.path.basename(possible_thumb)}")
                     cover_art_path = process_cover_art(possible_thumb, os.path.join(album_folder, "cover.jpg"))
                     break
-                
-        # REMOVE THIS PART - it's trying to convert the album title as a file
-        # Converting Album - Priceless.None to Album - Priceless.m4a...
         
         # Process tracks in parallel
         entries = [entry for entry in result.get('entries', []) if entry]  # Filter out None entries
@@ -501,6 +550,61 @@ def main():
     print("🎵 All files ready for VLC and other media players!")
     print("="*60)
     print("\nThank you for using YouTube Music Extractor! 🎶")
+
+def check_available_formats(url):
+    """Check and display available audio formats for quality verification"""
+    print("🔍 Analyzing available audio formats...")
+    
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+    }
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            
+            if '_type' in info and info['_type'] == 'playlist':
+                # For playlists, check first entry
+                entries = [entry for entry in info.get('entries', []) if entry]
+                if entries:
+                    formats = entries[0].get('formats', [])
+                    title = entries[0].get('title', 'Unknown')
+                else:
+                    print("❌ No valid entries found in playlist")
+                    return
+            else:
+                formats = info.get('formats', [])
+                title = info.get('title', 'Unknown')
+            
+            # Filter audio-only formats
+            audio_formats = [f for f in formats if f.get('vcodec') == 'none' and f.get('acodec') != 'none']
+            
+            if audio_formats:
+                print(f"\n🎵 Available audio formats for: {title}")
+                print("-" * 80)
+                print(f"{'Format ID':<12} {'Extension':<8} {'Quality':<15} {'Bitrate':<10} {'Codec':<10}")
+                print("-" * 80)
+                
+                for fmt in sorted(audio_formats, key=lambda x: x.get('abr', 0) or 0, reverse=True):
+                    format_id = fmt.get('format_id', 'Unknown')
+                    ext = fmt.get('ext', 'Unknown')
+                    quality = fmt.get('format_note', 'Unknown')
+                    bitrate = f"{fmt.get('abr', 'Unknown')}kbps" if fmt.get('abr') else 'Unknown'
+                    codec = fmt.get('acodec', 'Unknown')
+                    
+                    print(f"{format_id:<12} {ext:<8} {quality:<15} {bitrate:<10} {codec:<10}")
+                print("-" * 80)
+                
+                # Find the best quality
+                best_audio = max(audio_formats, key=lambda x: x.get('abr', 0) or 0)
+                print(f"🏆 Highest quality: {best_audio.get('format_id')} - {best_audio.get('abr', 'Unknown')}kbps")
+                
+            else:
+                print("❌ No audio-only formats found")
+                
+    except Exception as e:
+        print(f"❌ Error checking formats: {e}")
 
 if __name__ == "__main__":
     # When run directly, execute all the existing code
