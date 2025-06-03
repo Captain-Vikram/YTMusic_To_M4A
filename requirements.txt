@@ -1,6 +1,24 @@
-setuptools>=67.7.2
+# YouTube Music Extractor - Dependencies
+# Core functionality
 yt-dlp>=2023.3.4
 moviepy>=1.0.3
 mutagen>=1.46.0
 pillow>=9.4.0
 requests>=2.28.2
+
+# Build and packaging
+setuptools>=67.7.2
+pyinstaller>=5.0.0
+
+# GUI frameworks
+PyQt5>=5.15.0
+PyQt5-tools>=5.15.0
+
+# Windows integration (optional, for shortcuts)
+pywin32>=306; sys_platform == "win32"
+winshell>=0.6; sys_platform == "win32"
+
+# Development tools (optional)
+black>=23.0.0
+flake8>=6.0.0
+pytest>=7.0.0
