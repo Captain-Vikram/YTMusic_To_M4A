@@ -130,18 +130,23 @@ def process_single_track(entry, album_folder, cover_art_path, album_title, track
                 # Just use the original file as output
                 output_filename = original_filename
             else:
-                # Convert to M4A
+                # Convert to M4A with optimized settings for speed
                 audio_clip = AudioFileClip(original_filename)
-                # Write audio file without verbose parameter for compatibility
+                # Optimized audio conversion with faster settings
                 audio_clip.write_audiofile(
                     output_filename, 
-                    codec='aac', 
-                    bitrate='256k', 
-                    logger=None
+                    codec='aac',  # AAC codec for M4A
+                    bitrate='256k',  # High quality bitrate
+                    logger=None,  # Disable logging for speed
+                    verbose=False,  # Disable verbose output
+                    temp_audiofile=None,  # Let MoviePy handle temp files
+                    remove_temp=True,  # Clean up temp files automatically
+                    preset='fast',  # Use fast encoding preset
+                    ffmpeg_params=['-threads', '0']  # Use all available CPU cores
                 )
                 audio_clip.close()
                 
-                # Delete the original file after successful conversion
+                # Delete the original file after successful conversion to save space
                 if os.path.exists(original_filename):
                     os.remove(original_filename)
                     print(f"🗑️ Removed original file: {original_filename}")
@@ -257,14 +262,28 @@ def main():
     ydl_opts_info = {
         'quiet': True,
         'no_warnings': True,
+        'ignoreerrors': True,  # Continue on errors during analysis
     }
 
     with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
         try:
             info = ydl.extract_info(url, download=False)
         except Exception as e:
-            print(f"Error extracting info: {e}")
-            exit()
+            error_msg = str(e).lower()
+            if 'video unavailable' in error_msg or 'private video' in error_msg:
+                print(f"❌ Video unavailable: {e}")
+                print("💡 This video is private, deleted, or not accessible.")
+                print("💡 Please check the URL and try again with an accessible video or playlist.")
+                exit()
+            else:
+                print(f"❌ Error extracting info: {e}")
+                exit()
+    
+    # Check if info extraction was successful
+    if not info:
+        print("❌ Could not extract video information")
+        print("💡 The video may be unavailable, private, or the URL may be incorrect.")
+        exit()
 
     # Check if it's a playlist/album
     is_playlist = '_type' in info and info['_type'] == 'playlist'
@@ -293,8 +312,8 @@ def main():
             print(f"📁 Created track folder: {album_folder}")
         output_template = os.path.join(album_folder, "%(title)s.%(ext)s")
 
-    # Download with yt-dlp - Enhanced for highest quality
-    print("⬇️ Starting download...")
+    # Download with yt-dlp - Enhanced for highest quality and maximum speed
+    print("⬇️ Starting high-speed parallel download...")
     ydl_opts = {
         # Enhanced format selection for highest quality audio
         'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio[ext=opus]/bestaudio/best',
@@ -304,6 +323,26 @@ def main():
         # Add quality verification
         'extract_flat': False,
         'listformats': False,  # Set to True temporarily to see available formats
+        'ignoreerrors': True,  # Continue on download errors
+        'no_warnings': True,
+        # Performance optimizations for faster downloads
+        'concurrent_fragment_downloads': 8,  # Download fragments in parallel
+        'fragment_retries': 3,  # Retry failed fragments
+        'retries': 3,  # Retry failed downloads
+        'socket_timeout': 30,  # Socket timeout in seconds
+        'http_chunk_size': 10485760,  # 10MB chunks for faster download
+        # Network optimizations
+        'prefer_insecure': False,  # Use HTTPS when possible
+        'geo_bypass': True,  # Bypass geographic restrictions
+        'geo_bypass_country': None,  # Let yt-dlp choose best bypass
+        # Connection optimizations
+        'playlist_items': None,  # Download all items
+        'playliststart': 1,  # Start from first item
+        'playlistend': None,  # Download till end
+        # Speed optimizations
+        'simulate': False,  # Don't simulate, actually download
+        'skip_download': False,  # Don't skip download
+        'logtostderr': False,  # Don't log to stderr for cleaner output
     }
 
     # Optional: Print available formats for quality verification
@@ -317,8 +356,62 @@ def main():
     # with yt_dlp.YoutubeDL(ydl_opts_check) as ydl_check:
     #     ydl_check.extract_info(url, download=False)
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        result = ydl.extract_info(url, download=True)
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            result = ydl.extract_info(url, download=True)
+        
+        # Check if result is valid
+        if not result:
+            print("❌ No content could be downloaded")
+            exit()
+        
+        # For playlists, filter out failed entries
+        if is_playlist and 'entries' in result:
+            original_count = len(result.get('entries', []))
+            # Filter out None entries (failed downloads)
+            result['entries'] = [entry for entry in result.get('entries', []) if entry is not None]
+            failed_count = original_count - len(result['entries'])
+            
+            if failed_count > 0:
+                print(f"⚠️ {failed_count} tracks could not be downloaded (unavailable/private)")
+            
+            if not result['entries']:
+                print("❌ No tracks in playlist are available for download")
+                exit()
+        
+    except Exception as e:
+        error_msg = str(e).lower()
+        if 'video unavailable' in error_msg or 'private video' in error_msg:
+            if is_playlist:
+                print("⚠️ Some tracks in playlist are unavailable, continuing with available tracks...")
+                # For playlists, try to continue with available tracks
+                try:
+                    # Re-extract with ignoreerrors to get partial results
+                    ydl_opts['ignoreerrors'] = True
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        result = ydl.extract_info(url, download=True)
+                    if result and result.get('entries'):
+                        result['entries'] = [entry for entry in result.get('entries', []) if entry is not None]
+                        if result['entries']:
+                            print(f"✅ Downloaded {len(result['entries'])} available tracks")
+                        else:
+                            print("❌ No tracks in playlist are available")
+                            exit()
+                    else:
+                        print("❌ Could not download any tracks from playlist")
+                        exit()
+                except Exception as retry_error:
+                    print(f"❌ Playlist download failed: {retry_error}")
+                    exit()
+            else:
+                # For single tracks, this is a fatal error
+                print(f"❌ Video unavailable: {e}")
+                print("This video is not available for download (private, deleted, or region-restricted)")
+                exit()
+        else:
+            # Other types of errors
+            print(f"❌ Download error: {e}")
+            exit()
         
         # Check what format was actually downloaded
         if is_playlist:
@@ -374,18 +467,52 @@ def main():
                     cover_art_path = process_cover_art(possible_thumb, os.path.join(album_folder, "cover.jpg"))
                     break
         
-        # Process tracks in parallel
-        entries = [entry for entry in result.get('entries', []) if entry]  # Filter out None entries
+        # Process tracks in parallel - Enhanced filtering to skip unavailable/private videos
+        all_entries = result.get('entries', [])
+        valid_entries = []
+        skipped_count = 0
+        
+        for entry in all_entries:
+            if entry is None:
+                skipped_count += 1
+                continue
+            
+            # Check if entry has essential fields for processing
+            if (not entry.get('title') or 
+                entry.get('title') in ['[Private video]', '[Deleted video]', 'Private video', 'Deleted video'] or
+                not entry.get('url') or 
+                entry.get('availability') in ['private', 'premium_only', 'subscriber_only', 'needs_auth', 'unlisted'] or
+                entry.get('live_status') == 'is_upcoming'):
+                skipped_count += 1
+                print(f"⚠️ Skipping unavailable track: {entry.get('title', 'Unknown')}")
+                continue
+            
+            valid_entries.append(entry)
+        
+        entries = valid_entries
         total_tracks = len(entries)
+        
+        if skipped_count > 0:
+            print(f"📋 Skipped {skipped_count} unavailable/private tracks")
+        
+        if not entries:
+            print("❌ No valid tracks found to process")
+            exit()
         
         if entries:
             print(f"\n🚀 Starting parallel processing of {total_tracks} tracks...")
             
             # Use ThreadPoolExecutor for parallel processing
-            max_workers = min(4, total_tracks)  # Limit to 4 concurrent threads to avoid overwhelming the system
+            max_workers = min(8, total_tracks)  # Increase to 8 concurrent threads for faster processing
             successful_tracks = 0
+            failed_tracks = 0
+            
+            # Progress tracking
+            start_time = time.time()
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                print(f"⚡ Using {max_workers} parallel workers for maximum speed")
+                
                 # Submit all tasks
                 future_to_track = {
                     executor.submit(
@@ -400,18 +527,41 @@ def main():
                     for i, entry in enumerate(entries)
                 }
                 
-                # Process completed tasks
+                # Process completed tasks with real-time progress
                 for future in as_completed(future_to_track):
                     track_num, track_title = future_to_track[future]
                     try:
                         success = future.result()
                         if success:
                             successful_tracks += 1
-                        print(f"📊 Progress: {successful_tracks}/{total_tracks} tracks completed")
+                            print(f"✅ [{successful_tracks}/{total_tracks}] Track {track_num} completed: {track_title}")
+                        else:
+                            failed_tracks += 1
+                            print(f"❌ [{failed_tracks} failed] Track {track_num} failed: {track_title}")
+                        
+                        # Calculate and show ETA
+                        elapsed_time = time.time() - start_time
+                        completed = successful_tracks + failed_tracks
+                        if completed > 0:
+                            avg_time_per_track = elapsed_time / completed
+                            remaining_tracks = total_tracks - completed
+                            eta_seconds = avg_time_per_track * remaining_tracks
+                            eta_minutes = eta_seconds / 60
+                            
+                            if eta_minutes > 1:
+                                print(f"⏱️ Progress: {completed}/{total_tracks} tracks | ETA: {eta_minutes:.1f} minutes")
+                            else:
+                                print(f"⏱️ Progress: {completed}/{total_tracks} tracks | ETA: {eta_seconds:.0f} seconds")
                     except Exception as e:
-                        print(f"❌ Track {track_num} ({track_title}) failed: {e}")
+                        failed_tracks += 1
+                        print(f"❌ Track {track_num} error: {track_title} - {str(e)}")
+                        # Continue processing other tracks even if one fails
+                        continue
             
-            print(f"\n🎉 Parallel processing completed! {successful_tracks}/{total_tracks} tracks processed successfully")
+            total_time = time.time() - start_time
+            print(f"\n🎉 Parallel processing completed in {total_time:.1f} seconds!")
+            print(f"📊 Results: {successful_tracks} successful, {failed_tracks} failed out of {total_tracks} tracks")
+            print(f"⚡ Average time per track: {total_time/total_tracks:.1f} seconds")
         
     else:
         # Single track processing

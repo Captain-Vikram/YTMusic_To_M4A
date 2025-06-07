@@ -105,12 +105,14 @@ block_cipher = None
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
-    datas=[
+    binaries=[],    datas=[
         ('gui/icon.png', 'gui'),
+        ('gui/gui_beautiful.py', 'gui'),
+        ('gui/__init__.py', 'gui'),
+        ('main.py', '.'),
         ('README.md', '.'),
         ('requirements.txt', '.')
-    ],    hiddenimports=[
+    ],hiddenimports=[
         'yt_dlp',
         'mutagen',
         'mutagen.mp4',
@@ -120,6 +122,8 @@ a = Analysis(
         'moviepy.audio.io.AudioFileClip',
         'moviepy.audio.fx',
         'moviepy.video.fx',
+        'moviepy.audio.fx.all',
+        'moviepy.video.fx.all',
         'PIL',
         'PIL.Image',
         'requests',
@@ -136,7 +140,8 @@ a = Analysis(
         'imageio_ffmpeg',
         'decorator',
         'proglog',
-        'tqdm'
+        'tqdm',
+        'io'
     ],
     hookspath=[],
     hooksconfig={},
@@ -363,8 +368,7 @@ a = Analysis(
     datas=[
         ('gui/icon.png', 'gui'),
         ('README.md', '.'),
-        ('requirements.txt', '.')
-    ],    hiddenimports=[
+        ('requirements.txt', '.')    ],    hiddenimports=[
         'yt_dlp',
         'mutagen',
         'mutagen.mp4',
@@ -374,6 +378,8 @@ a = Analysis(
         'moviepy.audio.io.AudioFileClip',
         'moviepy.audio.fx',
         'moviepy.video.fx',
+        'moviepy.audio.fx.all',
+        'moviepy.video.fx.all',
         'PIL',
         'PIL.Image',
         'requests',
@@ -395,7 +401,8 @@ a = Analysis(
         'decorator',
         'proglog',
         'tqdm',
-        'main'
+        'main',
+        'io'
     ],
     hookspath=[],
     hooksconfig={},
