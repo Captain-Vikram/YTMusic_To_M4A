@@ -168,7 +168,40 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduc
 
 ## Changelog
 
-### v1.0.2 (Latest)
+### v1.0.3 (Latest)
+
+#### ✨ Major Enhancements
+- **Quality Detection**: Real-time audio quality verification and reporting
+- **Smart File Handling**: Robust filename matching prevents conversion errors
+- **Parallel Processing**: Faster album downloads with concurrent track processing
+- **VLC Optimization**: Perfect album artwork and external cover files
+
+#### 🔧 Technical Improvements
+- Enhanced M4A file detection (no unnecessary re-conversion)
+- Improved metadata embedding with better error handling
+- Smart cleanup system that preserves project files
+- Cross-platform filename sanitization
+- Optional format analysis before download
+
+#### 🎵 Audio Quality Features
+- Support for up to **320kbps AAC** downloads
+- Intelligent format selection prioritizes highest quality
+- Real-time quality reporting during download
+- Optional pre-download format analysis
+
+#### 📁 Better Organization
+- Clean folder structure for singles and albums
+- Automatic cleanup preserves only final M4A files
+- External cover art files for perfect VLC compatibility
+- Smart handling of existing M4A files (no re-processing)
+
+#### 🐛 Bug Fixes
+- Fixed filename mismatch issues during conversion
+- Resolved metadata embedding errors
+- Improved error handling for network issues
+- Better handling of special characters in filenames
+
+### v1.0.2
 - 🐛 Fixed bug in metadata handling
 - 📖 Updated documentation
 
