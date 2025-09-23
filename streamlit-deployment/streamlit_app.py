@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-YouTube Music Extractor - Streamlit Web App
-A modern web interface for downloading and processing YouTube music with metadata and cover art.
+YouTube Music Extractor - Streamlit Web App (Fixed Version)
+A modern web interface for downloading YouTube music with metadata and cover art.
 
 Features:
 - Clean and intuitive web interface
@@ -9,19 +9,16 @@ Features:
 - Quality selection options
 - Download history
 - Mobile-friendly design
+- Better error handling for web deployment
 """
 
 import streamlit as st
 import os
 import sys
-import threading
-import time
 import tempfile
-import shutil
 from pathlib import Path
 import zipfile
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add current directory to path to import main functions
 current_dir = Path(__file__).parent
@@ -33,8 +30,7 @@ try:
     from main import (
         sanitize_filename,
         process_cover_art,
-        process_single_track,
-        check_available_formats
+        process_single_track
     )
 except ImportError as e:
     st.error(f"Import Error: {e}")
@@ -61,30 +57,6 @@ st.markdown("""
         color: white;
     }
     
-    .download-card {
-        background: #f8f9fa;
-        padding: 1.5rem;
-        border-radius: 10px;
-        border-left: 4px solid #667eea;
-        margin: 1rem 0;
-    }
-    
-    .success-message {
-        background: #d4edda;
-        color: #155724;
-        padding: 1rem;
-        border-radius: 5px;
-        border-left: 4px solid #28a745;
-    }
-    
-    .error-message {
-        background: #f8d7da;
-        color: #721c24;
-        padding: 1rem;
-        border-radius: 5px;
-        border-left: 4px solid #dc3545;
-    }
-    
     .info-message {
         background: #d1ecf1;
         color: #0c5460;
@@ -102,15 +74,6 @@ st.markdown("""
 # Initialize session state
 if 'download_history' not in st.session_state:
     st.session_state.download_history = []
-
-if 'current_download' not in st.session_state:
-    st.session_state.current_download = None
-
-if 'download_progress' not in st.session_state:
-    st.session_state.download_progress = 0
-
-if 'download_status' not in st.session_state:
-    st.session_state.download_status = ""
 
 def is_valid_youtube_url(url):
     """Check if URL is a valid YouTube URL"""
@@ -137,20 +100,28 @@ def extract_video_info(url):
 
 def download_youtube_content(url, output_dir, quality_format, progress_callback=None):
     """Download YouTube content using existing functions"""
+    original_cwd = os.getcwd()
+    
     try:
-        # Create output directory if it doesn't exist
-        os.makedirs(output_dir, exist_ok=True)
+        # For web deployment, always use temp directory
+        output_dir = tempfile.mkdtemp(prefix="youtube_download_")
         
         # Change to output directory
-        original_cwd = os.getcwd()
         os.chdir(output_dir)
         
         # Progress hook for yt-dlp
         def progress_hook(d):
-            if progress_callback and d.get('status') == 'downloading':
-                if 'downloaded_bytes' in d and 'total_bytes' in d:
-                    progress = int((d['downloaded_bytes'] / d['total_bytes']) * 80)  # Leave 20% for processing
-                    progress_callback(progress, f"Downloading: {d.get('_percent_str', '0%')}")
+            try:
+                if progress_callback and d.get('status') == 'downloading':
+                    if '_percent_str' in d:
+                        try:
+                            percent = float(d['_percent_str'].replace('%', ''))
+                            progress = int(percent * 0.7)  # 70% for download
+                            progress_callback(progress, f"Downloading: {d['_percent_str']}")
+                        except (ValueError, TypeError):
+                            progress_callback(10, "Downloading...")
+            except Exception:
+                pass
         
         # Extract info first
         ydl_opts_info = {
@@ -162,10 +133,10 @@ def download_youtube_content(url, output_dir, quality_format, progress_callback=
         with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
             info = ydl.extract_info(url, download=False)
             if not info:
-                return False, "Could not extract video information"
+                return False, "Could not extract video information", None
         
         # Determine if it's a playlist or single video
-        is_playlist = 'entries' in info and len(info.get('entries', [])) > 1
+        is_playlist = 'entries' in info and info.get('entries') and len(info.get('entries', [])) > 1
         
         if is_playlist:
             album_title = sanitize_filename(info.get('title', 'Unknown Album'))
@@ -186,7 +157,7 @@ def download_youtube_content(url, output_dir, quality_format, progress_callback=
         if not os.path.exists(album_folder):
             os.makedirs(album_folder, exist_ok=True)
         
-        # Download options
+        # Download options with better error handling
         ydl_opts = {
             'format': quality_format,
             'writeinfojson': False,
@@ -195,6 +166,12 @@ def download_youtube_content(url, output_dir, quality_format, progress_callback=
             'progress_hooks': [progress_hook],
             'quiet': True,
             'no_warnings': True,
+            'ignoreerrors': True,
+            'extractaudio': True,
+            'audioformat': 'm4a',
+            'audioquality': '256K',
+            'socket_timeout': 30,
+            'retries': 3
         }
         
         # Download content
@@ -202,15 +179,18 @@ def download_youtube_content(url, output_dir, quality_format, progress_callback=
             ydl.download([url])
         
         if progress_callback:
-            progress_callback(85, "Processing downloaded files...")
+            progress_callback(70, "Processing downloaded files...")
         
-        # Process each track
+        # Process each track with better error handling
         success_count = 0
         for i, entry in enumerate(entries, 1):
             if entry is None:
                 continue
                 
             try:
+                if progress_callback:
+                    progress_callback(70 + (20 * i // len(entries)), f"Processing track {i}/{len(entries)}")
+                
                 success = process_single_track(
                     entry, 
                     album_folder, 
@@ -222,25 +202,26 @@ def download_youtube_content(url, output_dir, quality_format, progress_callback=
                 if success:
                     success_count += 1
                     
-                if progress_callback:
-                    track_progress = 85 + (10 * i // len(entries))
-                    progress_callback(track_progress, f"Processed {i}/{len(entries)} tracks")
-                    
             except Exception as e:
-                st.warning(f"Error processing track {i}: {str(e)}")
+                if progress_callback:
+                    progress_callback(70 + (20 * i // len(entries)), f"Error processing track {i}: {str(e)}")
                 continue
         
         # Cleanup temporary files
         if progress_callback:
             progress_callback(95, "Cleaning up temporary files...")
         
-        # Clean up downloaded files that aren't M4A
-        for file in os.listdir('.'):
-            if file.endswith(('.webm', '.mp4', '.opus', '.webp', '.jpg', '.png')) and not file.startswith(album_folder):
-                try:
-                    os.remove(file)
-                except:
-                    pass
+        try:
+            # Clean up downloaded files that aren't M4A
+            for file in os.listdir('.'):
+                if (file.endswith(('.webm', '.mp4', '.opus', '.webp', '.jpg', '.png', '.info.json')) 
+                    and not file.startswith(album_folder)):
+                    try:
+                        os.remove(file)
+                    except (OSError, PermissionError):
+                        pass
+        except Exception:
+            pass
         
         if progress_callback:
             progress_callback(100, f"Completed! Downloaded {success_count} tracks")
@@ -248,7 +229,7 @@ def download_youtube_content(url, output_dir, quality_format, progress_callback=
         # Return to original directory
         os.chdir(original_cwd)
         
-        return True, f"Successfully downloaded {success_count} tracks to {album_folder}"
+        return True, f"Successfully downloaded {success_count} tracks", os.path.join(output_dir, album_folder)
         
     except Exception as e:
         # Make sure we return to original directory
@@ -256,7 +237,7 @@ def download_youtube_content(url, output_dir, quality_format, progress_callback=
             os.chdir(original_cwd)
         except:
             pass
-        return False, f"Download failed: {str(e)}"
+        return False, f"Download failed: {str(e)}", None
 
 def create_download_archive(folder_path):
     """Create a ZIP archive of the downloaded music folder"""
@@ -289,9 +270,9 @@ def main():
         
         # Quality selection
         quality_options = {
-            "Best Quality (Recommended)": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio[ext=opus]/bestaudio/best",
-            "High Quality (256k)": "bestaudio[abr<=256]/bestaudio/best",
-            "Medium Quality (128k)": "bestaudio[abr<=128]/bestaudio/best",
+            "Best Quality (Recommended)": "bestaudio[ext=m4a]/bestaudio/best",
+            "High Quality (256k)": "bestaudio[abr<=256]/best",
+            "Medium Quality (128k)": "bestaudio[abr<=128]/best",
             "Any Quality": "bestaudio/best"
         }
         
@@ -300,20 +281,6 @@ def main():
             options=list(quality_options.keys()),
             index=0
         )
-        
-        # Output directory
-        default_output = os.path.join(os.path.expanduser("~"), "Downloads", "YouTube Music")
-        output_dir = st.text_input(
-            "📁 Output Directory",
-            value=default_output,
-            help="Directory where files will be saved"
-        )
-        
-        # Advanced options
-        with st.expander("🔧 Advanced Options"):
-            add_metadata = st.checkbox("📝 Add metadata and cover art", value=True)
-            auto_cleanup = st.checkbox("🧹 Auto-cleanup temporary files", value=True)
-            show_formats = st.checkbox("🔍 Show available formats before download", value=False)
         
         # Download history
         st.header("📋 Recent Downloads")
@@ -349,22 +316,12 @@ def main():
                     with st.spinner("Analyzing URL..."):
                         info = extract_video_info(url_input)
                         if info:
-                            if 'entries' in info and len(info.get('entries', [])) > 1:
+                            if 'entries' in info and info.get('entries') and len(info.get('entries', [])) > 1:
                                 st.info(f"📀 **Album/Playlist:** {info.get('title', 'Unknown')}")
                                 st.write(f"**Tracks:** {len(info['entries'])}")
                             else:
                                 st.info(f"🎵 **Single Track:** {info.get('title', 'Unknown')}")
-                                st.write(f"**Artist:** {info.get('uploader', 'Unknown')}")
-                                st.write(f"**Duration:** {info.get('duration_string', 'Unknown')}")
-                
-                # Show available formats if requested
-                if show_formats and url_input:
-                    if st.button("📊 Check Available Formats"):
-                        with st.spinner("Checking formats..."):
-                            try:
-                                check_available_formats(url_input)
-                            except Exception as e:
-                                st.error(f"Error checking formats: {str(e)}")
+                                st.write(f"**Uploader:** {info.get('uploader', 'Unknown')}")
                 
             else:
                 st.error("❌ Please enter a valid YouTube URL")
@@ -372,110 +329,76 @@ def main():
         # Download section
         st.header("⬇️ Download")
         
-        download_col1, download_col2 = st.columns([1, 1])
-        
-        with download_col1:
-            download_button = st.button(
-                "🚀 Start Download",
-                disabled=not url_input or not is_valid_youtube_url(url_input),
-                use_container_width=True
-            )
-        
-        with download_col2:
-            if st.session_state.current_download:
-                if st.button("❌ Cancel Download", use_container_width=True):
-                    st.session_state.current_download = None
-                    st.session_state.download_progress = 0
-                    st.session_state.download_status = "Cancelled"
-                    st.rerun()
-        
-        # Progress section
-        if st.session_state.current_download or st.session_state.download_progress > 0:
-            st.header("📊 Download Progress")
-            
-            progress_bar = st.progress(st.session_state.download_progress / 100)
-            status_text = st.empty()
-            
-            if st.session_state.download_status:
-                status_text.text(st.session_state.download_status)
+        download_button = st.button(
+            "🚀 Start Download",
+            disabled=not url_input or not is_valid_youtube_url(url_input),
+            use_container_width=True
+        )
         
         # Handle download
         if download_button and url_input and is_valid_youtube_url(url_input):
-            st.session_state.current_download = url_input
-            st.session_state.download_progress = 0
-            st.session_state.download_status = "Starting download..."
+            # Progress display containers
+            progress_bar = st.progress(0)
+            status_text = st.empty()
             
-            # Create output directory
-            os.makedirs(output_dir, exist_ok=True)
-            
-            # Progress callback
+            # Progress callback that updates the UI immediately
             def update_progress(progress, status):
-                st.session_state.download_progress = progress
-                st.session_state.download_status = status
+                progress_bar.progress(progress / 100)
+                status_text.text(status)
             
-            # Run download in a thread (Note: In production, use proper async handling)
-            with st.spinner("Downloading..."):
-                try:
-                    success, message = download_youtube_content(
+            # Run download
+            try:
+                with st.spinner("Downloading..."):
+                    success, message, folder_path = download_youtube_content(
                         url_input,
-                        output_dir,
+                        None,  # Will use temp directory
                         quality_options[selected_quality],
                         update_progress
                     )
+                
+                if success:
+                    st.success(f"✅ {message}")
                     
-                    if success:
-                        st.success(f"✅ {message}")
-                        
-                        # Add to download history
-                        download_record = {
-                            'url': url_input,
-                            'title': message.split(' to ')[-1] if ' to ' in message else 'Unknown',
-                            'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            'status': 'Success',
-                            'output_dir': output_dir
-                        }
-                        st.session_state.download_history.append(download_record)
-                        
-                        # Show download location
-                        st.info(f"📁 Files saved to: `{output_dir}`")
-                        
-                        # Option to create downloadable archive
+                    # Add to download history
+                    download_record = {
+                        'url': url_input,
+                        'title': message.split(' to ')[-1] if ' to ' in message else 'Unknown',
+                        'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'status': 'Success',
+                        'folder_path': folder_path
+                    }
+                    st.session_state.download_history.append(download_record)
+                    
+                    # Option to create downloadable archive
+                    if folder_path and os.path.exists(folder_path):
                         if st.button("📦 Create Downloadable Archive"):
                             with st.spinner("Creating archive..."):
-                                # Find the downloaded folder
-                                for item in os.listdir(output_dir):
-                                    item_path = os.path.join(output_dir, item)
-                                    if os.path.isdir(item_path):
-                                        zip_path = create_download_archive(item_path)
-                                        if zip_path and os.path.exists(zip_path):
-                                            with open(zip_path, "rb") as fp:
-                                                st.download_button(
-                                                    label="⬇️ Download ZIP Archive",
-                                                    data=fp.read(),
-                                                    file_name=os.path.basename(zip_path),
-                                                    mime="application/zip"
-                                                )
-                                        break
-                    else:
-                        st.error(f"❌ {message}")
+                                archive_path = create_download_archive(folder_path)
+                                if archive_path and os.path.exists(archive_path):
+                                    with open(archive_path, 'rb') as f:
+                                        st.download_button(
+                                            label="💾 Download ZIP Archive",
+                                            data=f.read(),
+                                            file_name=os.path.basename(archive_path),
+                                            mime="application/zip"
+                                        )
                         
-                        # Add to download history
-                        download_record = {
-                            'url': url_input,
-                            'title': 'Failed Download',
-                            'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            'status': f'Failed: {message}',
-                            'output_dir': output_dir
-                        }
-                        st.session_state.download_history.append(download_record)
-                
-                except Exception as e:
-                    st.error(f"❌ Unexpected error: {str(e)}")
-                
-                finally:
-                    st.session_state.current_download = None
-                    st.session_state.download_progress = 0
-                    st.session_state.download_status = ""
+                else:
+                    st.error(f"❌ {message}")
+                    
+                    # Add to download history
+                    download_record = {
+                        'url': url_input,
+                        'title': 'Failed Download',
+                        'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'status': f'Failed: {message}',
+                        'folder_path': None
+                    }
+                    st.session_state.download_history.append(download_record)
+            
+            except Exception as e:
+                st.error(f"❌ Unexpected error: {str(e)}")
+                st.error("This might be due to regional restrictions, private videos, or network issues.")
     
     with col2:
         st.header("ℹ️ Information")
@@ -488,7 +411,7 @@ def main():
         <li>🎵 High-quality audio extraction</li>
         <li>🖼️ Automatic metadata and cover art</li>
         <li>📁 Smart file organization</li>
-        <li>⚡ Fast parallel processing</li>
+        <li>⚡ Fast processing</li>
         <li>🎧 Multiple quality options</li>
         <li>📱 Mobile-friendly interface</li>
         </ul>
@@ -515,17 +438,11 @@ def main():
         with st.expander("💡 Tips"):
             st.write("""
             - Use YouTube Music URLs for best metadata
-            - Albums/playlists are processed in parallel
-            - Files are organized automatically
+            - Albums/playlists are processed automatically
+            - Files are organized in folders
             - Cover art is optimized for media players
-            - Temporary files are cleaned up automatically
+            - Download the ZIP archive to get your files
             """)
-        
-        # System info
-        with st.expander("🔧 System Info"):
-            st.write(f"**Python Version:** {st.__version__}")
-            st.write(f"**Output Directory:** `{output_dir}`")
-            st.write(f"**Selected Quality:** {selected_quality}")
 
 if __name__ == "__main__":
     main()

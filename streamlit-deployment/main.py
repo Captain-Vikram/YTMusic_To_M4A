@@ -23,6 +23,10 @@ def sanitize_filename(filename):
 def process_cover_art(img_path, jpg_path):
     """Process cover art: crop to square and resize for VLC compatibility"""
     try:
+        if not os.path.exists(img_path):
+            print(f"Warning: Cover art file not found: {img_path}")
+            return None
+            
         img = Image.open(img_path)
         
         # Crop to 1:1 square ratio (centered)
@@ -30,15 +34,15 @@ def process_cover_art(img_path, jpg_path):
         if width != height:
             print(f"Cropping image from {width}x{height} to 1:1 ratio")
             if width > height:
-                left = (width - height) // 2
+                left = (width - height) / 2
                 top = 0
-                right = left + height
+                right = (width + height) / 2
                 bottom = height
             else:
                 left = 0
-                top = (height - width) // 2
+                top = (height - width) / 2
                 right = width
-                bottom = top + width
+                bottom = (height + width) / 2
             
             img = img.crop((left, top, right, bottom))
             print(f"Cropped to square: {img.size[0]}x{img.size[1]}")
@@ -51,12 +55,18 @@ def process_cover_art(img_path, jpg_path):
             
         # Convert to RGB mode for JPG
         img = img.convert('RGB')
+        
+        # Create directory for jpg_path if it doesn't exist
+        jpg_dir = os.path.dirname(jpg_path)
+        if jpg_dir and not os.path.exists(jpg_dir):
+            os.makedirs(jpg_dir, exist_ok=True)
+            
         img.save(jpg_path, "JPEG", quality=95)
         print(f"Created square JPG version of cover art: {jpg_path}")
         return jpg_path
     except Exception as e:
         print(f"Error processing image: {e}")
-        return img_path
+        return None
 
 def process_single_track(entry, album_folder, cover_art_path, album_title, track_num=None, total_tracks=None):
     """Process a single track from an album or a standalone song"""
