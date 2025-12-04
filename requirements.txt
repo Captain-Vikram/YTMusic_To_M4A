@@ -1,4 +1,4 @@
-# YouTube Music Extractor - Dependencies
+# TrackOut - Dependencies
 # Core functionality
 yt-dlp>=2023.3.4
 moviepy>=1.0.3
@@ -13,6 +13,9 @@ pyinstaller>=5.0.0
 # GUI frameworks
 PyQt5>=5.15.0
 PyQt5-tools>=5.15.0
+
+# Music Player
+python-vlc>=3.0.0
 
 # Windows integration (optional, for shortcuts)
 pywin32>=306; sys_platform == "win32"

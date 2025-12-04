@@ -1,5 +1,5 @@
 """
-Configuration settings for the YouTube Music Extractor.
+Configuration settings for TrackOut.
 """
 
 # Default output format

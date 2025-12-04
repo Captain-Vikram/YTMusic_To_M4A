@@ -6,7 +6,7 @@ import threading
 import time
 import glob
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from moviepy import AudioFileClip
+import subprocess
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import ID3, APIC, TIT2, TALB, TPE1, TCON
@@ -14,11 +14,29 @@ from PIL import Image
 import io
 
 def sanitize_filename(filename):
-    """Remove or replace invalid characters for Windows filenames"""
+    """Make filenames safe for Windows and other filesystems.
+
+    This replaces reserved characters, normalizes smart quotes, removes
+    control characters and strips trailing spaces/dots.
+    """
+    if not filename:
+        return 'Unknown'
+    s = str(filename)
+    smart_quotes = '“”‘’«»'
+    for ch in smart_quotes:
+        s = s.replace(ch, '"')
     invalid_chars = '<>:"/\\|?*'
-    for char in invalid_chars:
-        filename = filename.replace(char, '_')
-    return filename.strip()
+    for ch in invalid_chars:
+        s = s.replace(ch, '_')
+    s = ''.join(c if ord(c) >= 32 else '_' for c in s)
+    s = s.strip()
+    while s.endswith('.') or s.endswith(' '):
+        s = s[:-1]
+    while '__' in s:
+        s = s.replace('__', '_')
+    if not s:
+        return 'Unknown'
+    return s
 
 def process_cover_art(img_path, jpg_path):
     """Process cover art: crop to square and resize for VLC compatibility"""
@@ -58,6 +76,31 @@ def process_cover_art(img_path, jpg_path):
         print(f"Error processing image: {e}")
         return img_path
 
+
+def _find_ffmpeg():
+    """Locate ffmpeg executable using IMAGEIO_FFMPEG_EXE or PATH."""
+    ff = os.environ.get('IMAGEIO_FFMPEG_EXE')
+    if ff and os.path.exists(ff):
+        return ff
+    return shutil.which('ffmpeg')
+
+
+def ffmpeg_convert(input_path, output_path, bitrate='256k'):
+    """Convert input audio/video to M4A using ffmpeg subprocess.
+
+    Raises RuntimeError on failure.
+    """
+    ff = _find_ffmpeg()
+    if not ff:
+        raise RuntimeError('ffmpeg executable not found')
+
+    cmd = [ff, '-y', '-i', input_path, '-c:a', 'aac', '-b:a', bitrate, output_path]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode(errors='ignore')
+        raise RuntimeError(f'ffmpeg conversion failed: {stderr}')
+    return True
+
 def process_single_track(entry, album_folder, cover_art_path, album_title, track_num=None, total_tracks=None):
     """Process a single track from an album or a standalone song"""
     try:
@@ -68,8 +111,8 @@ def process_single_track(entry, album_folder, cover_art_path, album_title, track
         track_info = f"Track {track_num}/{total_tracks}: {title}" if track_num else title
         print(f"🎵 Starting {track_info}")
         
-        # Find the downloaded audio file - be more flexible with filename matching
-        possible_extensions = ['webm', 'mp4', 'm4a', 'opus']
+        # Find the downloaded audio file - be more flexible with filename matching - UPDATED TO HANDLE MP4
+        possible_extensions = ['m4a', 'webm', 'mp4', 'opus', 'aac', 'mp3']  # Added MP4 and other formats
         original_filename = None
         
         # Search for files that start with the title (handles slight filename variations)
@@ -97,13 +140,11 @@ def process_single_track(entry, album_folder, cover_art_path, album_title, track
             # List available files for debugging
             print("Available files in current directory:")
             for file in os.listdir('.'):
-                if any(file.endswith(ext) for ext in possible_extensions):
-                    print(f"  - {file}")
+                print(f"  - {file}")
             if album_folder and os.path.exists(album_folder):
                 print(f"Available files in {album_folder}:")
                 for file in os.listdir(album_folder):
-                    if any(file.endswith(ext) for ext in possible_extensions):
-                        print(f"  - {file}")
+                    print(f"  - {file}")
             return False
         
         # Ensure album folder exists
@@ -121,42 +162,33 @@ def process_single_track(entry, album_folder, cover_art_path, album_title, track
         print(f"📁 Input: {original_filename}")
         print(f"📁 Output: {output_filename}")
         
-        # Convert audio to m4a
+        # Convert audio to m4a using ffmpeg subprocess (fallbacks to keeping original)
         print(f"🔄 Converting {track_info}...")
         try:
-            # Check if the file is already M4A and just needs to be kept
+            # If already M4A, keep as-is
             if original_filename.lower().endswith('.m4a'):
                 print(f"✅ File is already M4A format, no conversion needed")
-                # Just use the original file as output
                 output_filename = original_filename
             else:
-                # Convert to M4A with optimized settings for speed
-                audio_clip = AudioFileClip(original_filename)
-                # Optimized audio conversion with faster settings
-                audio_clip.write_audiofile(
-                    output_filename, 
-                    codec='aac',  # AAC codec for M4A
-                    bitrate='256k',  # High quality bitrate
-                    logger=None,  # Disable logging for speed
-                    verbose=False,  # Disable verbose output
-                    temp_audiofile=None,  # Let MoviePy handle temp files
-                    remove_temp=True,  # Clean up temp files automatically
-                    preset='fast',  # Use fast encoding preset
-                    ffmpeg_params=['-threads', '0']  # Use all available CPU cores
-                )
-                audio_clip.close()
-                
-                # Delete the original file after successful conversion to save space
-                if os.path.exists(original_filename):
-                    os.remove(original_filename)
-                    print(f"🗑️ Removed original file: {original_filename}")
-            
+                # Attempt ffmpeg conversion
+                try:
+                    ffmpeg_convert(original_filename, output_filename, bitrate='256k')
+                    # Remove original if conversion produced a different file
+                    try:
+                        if os.path.exists(original_filename) and os.path.abspath(original_filename) != os.path.abspath(output_filename):
+                            os.remove(original_filename)
+                            print(f"🗑️ Removed original file: {original_filename}")
+                    except Exception:
+                        pass
+                except Exception as conv_e:
+                    # Conversion failed — re-raise to be handled by outer except
+                    raise conv_e
+
             print(f"✅ Converted {track_info}")
         except Exception as e:
             print(f"❌ Error converting {track_info}: {e}")
             # If conversion failed, check if we can work with the original file
             if original_filename.lower().endswith('.m4a') and os.path.exists(original_filename):
-                # It's already M4A, just use it
                 output_filename = original_filename
                 print(f"✅ Using original M4A file: {output_filename}")
             else:
@@ -170,7 +202,7 @@ def process_single_track(entry, album_folder, cover_art_path, album_title, track
                     except Exception as move_e:
                         print(f"⚠️ Could not move {original_filename}: {move_e}")
                         output_filename = original_filename
-                        
+
                 # Skip metadata for non-M4A files
                 if not output_filename.lower().endswith('.m4a'):
                     print(f"⚠️ Skipping metadata for non-M4A file: {output_filename}")
@@ -315,11 +347,15 @@ def main():
     # Download with yt-dlp - Enhanced for highest quality and maximum speed
     print("⬇️ Starting high-speed parallel download...")
     ydl_opts = {
-        # Enhanced format selection for highest quality audio
-        'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio[ext=opus]/bestaudio/best',
+        # Enhanced format selection for highest quality audio - FIXED TO EXTRACT AUDIO FROM VIDEO
+        'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio[ext=opus]/bestaudio/best[height<=720]',
         'outtmpl': output_template,
         'writeinfojson': True,  # Enable to check quality info
         'writethumbnail': True,
+        # Audio extraction settings - FORCE AUDIO EXTRACTION
+        'extractaudio': True,  # Extract audio from video
+        'audioformat': 'm4a',  # Convert to M4A format
+        'audioquality': '256K',  # High quality audio
         # Add quality verification
         'extract_flat': False,
         'listformats': False,  # Set to True temporarily to see available formats
@@ -699,7 +735,7 @@ def main():
 
     print("🎵 All files ready for VLC and other media players!")
     print("="*60)
-    print("\nThank you for using YouTube Music Extractor! 🎶")
+    print("\nThank you for using TrackOut! 🎶")
 
 def check_available_formats(url):
     """Check and display available audio formats for quality verification"""

@@ -1,4 +1,4 @@
-# Contributing to YouTube Music Extractor
+# Contributing to TrackOut
 
 Thank you for considering contributing to this project! Here are some guidelines to help you get started.
 

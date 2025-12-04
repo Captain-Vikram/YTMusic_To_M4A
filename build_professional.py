@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Professional Build Script for YouTube Music Extractor
+Professional Build Script for TrackOut
 Creates optimized executables for both Console and GUI versions
 """
 
@@ -10,6 +10,12 @@ import subprocess
 import shutil
 from pathlib import Path
 import time
+import textwrap
+
+# Application naming
+APP_NAME = 'TrackOut'
+GUI_EXE_NAME = f"{APP_NAME}_GUI"
+CONSOLE_EXE_NAME = f"{APP_NAME}_Console"
 
 def install_requirements():
     """Install all required packages including PyInstaller"""
@@ -73,10 +79,17 @@ def create_icon():
         from PIL import Image
         
         # Use the existing PNG icon
-        png_icon_path = "gui/icon.png"
+        # prefer package icon, fallback to gui/icon.png
+        png_icon_path = None
+        if os.path.exists('trackout/icon.png'):
+            png_icon_path = 'trackout/icon.png'
+        elif os.path.exists('gui/icon.png'):
+            png_icon_path = 'gui/icon.png'
+        else:
+            png_icon_path = 'gui/icon.png'
         ico_icon_path = "app_icon.ico"
         
-        if os.path.exists(png_icon_path):
+        if png_icon_path and os.path.exists(png_icon_path):
             # Load and convert PNG to ICO
             img = Image.open(png_icon_path)
             
@@ -102,14 +115,14 @@ def create_console_spec():
 
 block_cipher = None
 
-a = Analysis(
-    ['main.py'],
+    a = Analysis(
+    ['trackout/core.py'],
     pathex=[],
     binaries=[],    datas=[
-        ('gui/icon.png', 'gui'),
-        ('gui/gui_beautiful.py', 'gui'),
-        ('gui/__init__.py', 'gui'),
-        ('main.py', '.'),
+        ('trackout/icon.png', 'trackout'),
+        ('trackout/gui_full.py', 'trackout'),
+        ('trackout/__init__.py', 'trackout'),
+        ('trackout/core.py', '.'),
         ('README.md', '.'),
         ('requirements.txt', '.')
     ],hiddenimports=[
@@ -128,6 +141,10 @@ a = Analysis(
         'PIL.Image',
         'requests',
         'numpy',
+        """
+        Professional Build Script for TrackOut
+        Creates optimized executables for both Console and GUI versions
+        """
         'numpy.core',
         'numpy.core._multiarray_umath',
         'concurrent.futures',
@@ -163,14 +180,14 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-exe = EXE(
+    exe = EXE(
     pyz,
     a.scripts,
     a.binaries,
     a.zipfiles,
     a.datas,
     [],
-    name='YT_Music_Extractor_Console',
+    name='{CONSOLE_NAME}',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -187,6 +204,17 @@ exe = EXE(
 )
 '''
     
+    # Replace placeholders and normalize indentation
+    spec_content = spec_content.replace('{CONSOLE_NAME}', CONSOLE_EXE_NAME)
+    # Normalize indentation: remove common 4-space prefix if present
+    lines = spec_content.splitlines()
+    normalized = []
+    for line in lines:
+        if line.startswith('    '):
+            normalized.append(line[4:])
+        else:
+            normalized.append(line)
+    spec_content = '\n'.join(normalized) + ('\n' if spec_content.endswith('\n') else '')
     with open('console.spec', 'w') as f:
         f.write(spec_content)
     
@@ -196,7 +224,7 @@ def create_gui_launcher():
     """Create a GUI launcher that uses the beautiful GUI"""
     launcher_content = '''#!/usr/bin/env python3
 """
-GUI Launcher for YouTube Music Extractor
+GUI Launcher for TrackOut
 """
 
 import sys
@@ -221,7 +249,7 @@ def main():
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler('yt_music_extractor.log'),
+                logging.FileHandler('trackout.log'),
             ]
         )
         
@@ -230,7 +258,7 @@ def main():
         app.setQuitOnLastWindowClosed(True)
         
         try:
-            from gui.gui_beautiful import YouTubeMusicExtractorGUI
+            from trackout.gui_full import YouTubeMusicExtractorGUI
             
             # Create and show the main window
             window = YouTubeMusicExtractorGUI()
@@ -268,11 +296,11 @@ def main():
             QMessageBox.critical(None, "GUI Error", 
                                f"Main GUI failed to load. Using simple interface."
                                f"Error: {str(gui_error)}"
-                               f"Check 'yt_music_extractor.log' for details.")
+                               f"Check 'trackout.log' for details.")
             
             # Create a simple input window
             widget = QWidget()
-            widget.setWindowTitle("YouTube Music Extractor - Simple GUI")
+            widget.setWindowTitle("TrackOut - Simple GUI")
             widget.setGeometry(300, 300, 500, 200)
             widget.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
             
@@ -292,7 +320,7 @@ def main():
                 if url:
                     # Import and call main with the URL
                     try:
-                        import main
+                        import trackout.core as main
                         # Set the URL for main to use
                         import builtins
                         original_input = builtins.input
@@ -361,12 +389,12 @@ def create_gui_spec():
 
 block_cipher = None
 
-a = Analysis(
-    ['gui_launcher.py'],
+    a = Analysis(
+    ['trackout/gui_launcher.py'],
     pathex=[],
     binaries=[],
     datas=[
-        ('gui/icon.png', 'gui'),
+        ('trackout/icon.png', 'trackout'),
         ('README.md', '.'),
         ('requirements.txt', '.')    ],    hiddenimports=[
         'yt_dlp',
@@ -401,7 +429,7 @@ a = Analysis(
         'decorator',
         'proglog',
         'tqdm',
-        'main',
+        'trackout.core',
         'io'
     ],
     hookspath=[],
@@ -425,13 +453,13 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-exe = EXE(
+    exe = EXE(
     pyz,
     a.scripts,
     a.binaries,
     a.zipfiles,
     a.datas,
-    [],    name='YT_Music_Extractor_GUI',
+    [],    name='{GUI_NAME}',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -448,6 +476,16 @@ exe = EXE(
 )
 '''
     
+    spec_content = spec_content.replace('{GUI_NAME}', GUI_EXE_NAME)
+    # Normalize indentation: remove common 4-space prefix if present
+    lines = spec_content.splitlines()
+    normalized = []
+    for line in lines:
+        if line.startswith('    '):
+            normalized.append(line[4:])
+        else:
+            normalized.append(line)
+    spec_content = '\n'.join(normalized) + ('\n' if spec_content.endswith('\n') else '')
     with open('gui.spec', 'w') as f:
         f.write(spec_content)
     
@@ -533,10 +571,10 @@ def build_executables():
 def create_launcher_batch():
     """Create a launcher batch file"""
     batch_content = '''@echo off
-title YouTube Music Extractor Launcher
+title TrackOut Launcher
 echo.
 echo ================================
-echo  YouTube Music Extractor
+echo  TrackOut
 echo ================================
 echo.
 echo Choose version to run:
@@ -549,11 +587,11 @@ set /p choice="Enter your choice (1-3): "
 if "%choice%"=="1" (
     echo.
     echo Starting Console Version...
-    "YT_Music_Extractor_Console.exe"
+    "TrackOut.exe"
 ) else if "%choice%"=="2" (
     echo.
     echo Starting GUI Version (no console window will appear)...
-    start "" "YT_Music_Extractor_GUI.exe"
+    start "" "TrackOut_GUI.exe"
     echo GUI started! Look for the application window.
     timeout /t 2 /nobreak >nul
     exit
@@ -564,21 +602,21 @@ if "%choice%"=="1" (
 ) else (
     echo.
     echo Invalid choice. Starting Console Version...
-    "YT_Music_Extractor_Console.exe"
+    "TrackOut_Console.exe"
 )
 
 echo.
 pause
 '''
     
-    with open('dist/Launch_YT_Music_Extractor.bat', 'w') as f:
+    with open('dist/Launch_TrackOut.bat', 'w') as f:
         f.write(batch_content)
     
     print("   ✅ Created launcher batch file")
 
 def build_gui_only():
     """Build only the GUI executable"""
-    print("🚀 YouTube Music Extractor - GUI Only Build")
+    print("🚀 TrackOut - GUI Only Build")
     print("=" * 50)
     
     # Change to project directory
@@ -674,14 +712,14 @@ def build_gui_only():
             else:
                 print(f"   📁 {item}/")
     
-    print(f"\n🚀 GUI executable is ready: dist/YT_Music_Extractor_GUI.exe")
+    print(f"\n🚀 GUI executable is ready: dist/TrackOut_GUI.exe")
     print("💡 The executable is fully self-contained and portable!")
     
     return True
 
 def main():
     """Main build process"""
-    print("🚀 YouTube Music Extractor - Professional Build System")
+    print("🚀 TrackOut - Professional Build System")
     print("=" * 60)
     
     # Change to project directory
@@ -743,7 +781,7 @@ def main():
                     print(f"   📁 {item}/")
         
         print("\n🚀 Your executables are ready in the 'dist' folder!")
-        print("   • Run 'Launch_YT_Music_Extractor.bat' for easy access")
+        print("   • Run 'Launch_TrackOut.bat' for easy access")
         print("   • Or run the executables directly")
         print("\n💡 The executables are fully self-contained and portable!")
         
