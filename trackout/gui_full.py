@@ -43,6 +43,38 @@ from PyQt5.QtGui import (
     QRadialGradient, QPen, QPolygonF, QConicalGradient
 )
 
+# Embeddable search panel from the smaller search UI
+# Prefer the local `trackout.idea_gui` implementation so the app
+# uses only the modules from the `trackout` package (no `search_yt`).
+try:
+    # Try relative import when running as a package
+    from .idea_gui import SearchPanel
+except Exception:
+    try:
+        # Fallback to top-level module name if present on sys.path
+        from idea_gui import SearchPanel
+    except Exception:
+        # Last-resort: load the sibling `trackout/idea_gui.py` by file path
+        try:
+            import importlib.util, os
+            candidate = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'idea_gui.py')
+            candidate = os.path.normpath(candidate)
+            if os.path.exists(candidate):
+                spec = importlib.util.spec_from_file_location('trackout.idea_gui', candidate)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                # SearchPanel may be defined at module level or nested inside a
+                # window class (e.g. SearchOutMainWindow.SearchPanel). Try both.
+                SearchPanel = getattr(mod, 'SearchPanel', None)
+                if SearchPanel is None:
+                    parent_cls = getattr(mod, 'SearchOutMainWindow', None)
+                    if parent_cls is not None:
+                        SearchPanel = getattr(parent_cls, 'SearchPanel', None)
+            else:
+                SearchPanel = None
+        except Exception:
+            SearchPanel = None
+
 # Import the main processing functions
 # Handle both development and PyInstaller environments
 def get_main_functions():
@@ -84,6 +116,21 @@ def get_main_functions():
                     )
             except Exception as e:
                 print(f"Could not import main functions: {e}")
+        # If package-relative or root main imports failed, try loading `core.py`
+        try:
+            core_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'core.py')
+            if os.path.exists(core_path):
+                spec = importlib.util.spec_from_file_location('trackout.core', core_path)
+                core_local = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(core_local)
+                return (
+                    getattr(core_local, 'sanitize_filename', None) or (lambda x: x),
+                    getattr(core_local, 'process_cover_art', None) or (lambda a, b: None),
+                    getattr(core_local, 'process_single_track', None) or (lambda *a, **k: True),
+                    getattr(core_local, 'check_available_formats', None) or (lambda url: [])
+                )
+        except Exception as e:
+            print(f"Could not import trackout.core via path loader: {e}")
     
     # Fallback implementations
     def sanitize_filename(filename):
@@ -232,24 +279,39 @@ class DownloadWorker(QThread):
                 # Sanitize album title and ensure the final folder name is safe
                 raw_album_title = info.get('title', 'Unknown Album')
                 album_title = sanitize_filename(raw_album_title)
-                # Construct folder name and sanitize again to be safe
-                folder_name = sanitize_filename(album_title)
-                album_folder = os.path.join(self.output_dir, folder_name)
+                # Construct folder name, extra-sanitize, and normalize path to avoid WinError 267 on frozen exe
+                folder_name = sanitize_filename(album_title).strip().rstrip('. ')
+                # Guard against reserved Windows device names
+                reserved = {'con', 'prn', 'aux', 'nul', 'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9', 'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9'}
+                if folder_name.lower() in reserved:
+                    folder_name = f"Album_{int(time.time())}"
+                album_folder = os.path.normpath(os.path.join(self.output_dir, folder_name))
+                self.log_updated.emit(
+                    f"🧭 Target folder: base={self.output_dir} title={album_title} folder_name={folder_name} -> {album_folder}",
+                    "info"
+                )
 
                 try:
                     os.makedirs(album_folder, exist_ok=True)
                     self.log_updated.emit(f"📁 Created: {album_folder}", "success")
                 except OSError as makedirs_err:
-                    # If path is invalid (WinError 123) fall back to a safe folder name
-                    try:
-                        safe_stamp = str(int(time.time()))
-                        fallback = f"Album_{safe_stamp}"
-                        album_folder = os.path.join(self.output_dir, fallback)
-                        os.makedirs(album_folder, exist_ok=True)
-                        self.log_updated.emit(f"⚠️ Used fallback album folder: {album_folder}", "warning")
-                    except Exception as fb_err:
-                        self.log_updated.emit(f"❌ Could not create album folder: {fb_err}", "error")
-                        self.download_finished.emit(False, f"Could not create album folder: {fb_err}")
+                    # Only fall back for invalid path errors; otherwise keep the original folder if it exists
+                    if os.path.isdir(album_folder):
+                        self.log_updated.emit(f"📁 Using existing folder: {album_folder}", "info")
+                    elif getattr(makedirs_err, 'winerror', None) in {123, 206, 267}:  # invalid name / path too long / invalid directory name
+                        try:
+                            safe_stamp = str(int(time.time()))
+                            fallback = f"Album_{safe_stamp}"
+                            album_folder = os.path.normpath(os.path.join(self.output_dir, fallback))
+                            os.makedirs(album_folder, exist_ok=True)
+                            self.log_updated.emit(f"⚠️ Used fallback album folder: {album_folder}", "warning")
+                        except Exception as fb_err:
+                            self.log_updated.emit(f"❌ Could not create album folder: {fb_err}", "error")
+                            self.download_finished.emit(False, f"Could not create album folder: {fb_err}")
+                            return
+                    else:
+                        self.log_updated.emit(f"❌ Could not create album folder: {makedirs_err}", "error")
+                        self.download_finished.emit(False, f"Could not create album folder: {makedirs_err}")
                         return
 
                 output_template = os.path.join(album_folder, "%(title)s.%(ext)s")
@@ -259,22 +321,36 @@ class DownloadWorker(QThread):
                 track_title = sanitize_filename(raw_title)
                 album_title = track_title
 
-                folder_name = sanitize_filename(f"Single - {track_title}")
-                album_folder = os.path.join(self.output_dir, folder_name)
+                folder_name = sanitize_filename(f"Single - {track_title}").strip().rstrip('. ')
+                reserved = {'con', 'prn', 'aux', 'nul', 'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9', 'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9'}
+                if folder_name.lower() in reserved:
+                    folder_name = f"Single_{int(time.time())}"
+                album_folder = os.path.normpath(os.path.join(self.output_dir, folder_name))
+                self.log_updated.emit(
+                    f"🧭 Target folder: base={self.output_dir} title={track_title} folder_name={folder_name} -> {album_folder}",
+                    "info"
+                )
 
                 try:
                     os.makedirs(album_folder, exist_ok=True)
                     self.log_updated.emit(f"📁 Created: {album_folder}", "success")
                 except OSError as makedirs_err:
-                    try:
-                        safe_stamp = str(int(time.time()))
-                        fallback = f"Single_{safe_stamp}"
-                        album_folder = os.path.join(self.output_dir, fallback)
-                        os.makedirs(album_folder, exist_ok=True)
-                        self.log_updated.emit(f"⚠️ Used fallback album folder: {album_folder}", "warning")
-                    except Exception as fb_err:
-                        self.log_updated.emit(f"❌ Could not create album folder: {fb_err}", "error")
-                        self.download_finished.emit(False, f"Could not create album folder: {fb_err}")
+                    if os.path.isdir(album_folder):
+                        self.log_updated.emit(f"📁 Using existing folder: {album_folder}", "info")
+                    elif getattr(makedirs_err, 'winerror', None) in {123, 206, 267}:  # invalid name or too long or invalid dir name
+                        try:
+                            safe_stamp = str(int(time.time()))
+                            fallback = f"Single_{safe_stamp}"
+                            album_folder = os.path.normpath(os.path.join(self.output_dir, fallback))
+                            os.makedirs(album_folder, exist_ok=True)
+                            self.log_updated.emit(f"⚠️ Used fallback album folder: {album_folder}", "warning")
+                        except Exception as fb_err:
+                            self.log_updated.emit(f"❌ Could not create album folder: {fb_err}", "error")
+                            self.download_finished.emit(False, f"Could not create album folder: {fb_err}")
+                            return
+                    else:
+                        self.log_updated.emit(f"❌ Could not create album folder: {makedirs_err}", "error")
+                        self.download_finished.emit(False, f"Could not create album folder: {makedirs_err}")
                         return
 
                 output_template = os.path.join(album_folder, "%(title)s.%(ext)s")
@@ -1052,22 +1128,28 @@ class YouTubeMusicExtractorGUI(QMainWindow):
         # Apply global stylesheet based on current theme
         self.apply_theme()
         
-        # Create central widget
+        # Central widget with left and right panels (Search opens in a popup)
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        
-        # Main layout
+
         main_layout = QHBoxLayout(central_widget)
         main_layout.setSpacing(20)
         main_layout.setContentsMargins(20, 20, 20, 20)
-        
-        # Left panel (input and controls)
+
         left_panel = self.create_left_panel()
         main_layout.addWidget(left_panel, 1)
-        
-        # Right panel (output and preview)
+
         right_panel = self.create_right_panel()
         main_layout.addWidget(right_panel, 2)
+
+        try:
+            main_layout.setStretch(0, 1)
+            main_layout.setStretch(1, 2)
+        except Exception:
+            pass
+
+        # No embedded search tab here; SearchPanel will be shown in a popup dialog
+        self.search_panel = None
         
         # Create menu bar and status bar
         self.create_menu_bar()
@@ -1136,6 +1218,13 @@ class YouTubeMusicExtractorGUI(QMainWindow):
         # Log the theme change
         theme_name = "Light Mode" if self.is_light_mode else "Dark Mode"
         self.log_output.append(f"🎨 Switched to {theme_name}")
+        # Sync embedded search panel theme if present
+        try:
+            if hasattr(self, 'search_panel') and self.search_panel:
+                # SearchPanel.apply_theme expects dark=True for dark theme
+                self.search_panel.apply_theme(not self.is_light_mode)
+        except Exception:
+            pass
 
     def update_all_components_theme(self):
         """Update theme for all UI components"""
@@ -1173,6 +1262,12 @@ class YouTubeMusicExtractorGUI(QMainWindow):
                         background: rgba(255, 255, 255, 0.05);
                     }
                 """)
+        # Sync search panel theme if embedded
+        try:
+            if hasattr(self, 'search_panel') and self.search_panel:
+                self.search_panel.apply_theme(not self.is_light_mode)
+        except Exception:
+            pass
         
         # Update menu bar and status bar themes
         if hasattr(self, 'menuBar') and self.menuBar():
@@ -2218,6 +2313,16 @@ class YouTubeMusicExtractorGUI(QMainWindow):
         about_action = QAction("ℹ️ About", self)
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
+
+        # Top-level Search toggle (appears next to File / Tools / Help)
+        try:
+            search_action = QAction("🔎 Search", self)
+            search_action.setCheckable(False)
+            self.search_action = search_action
+            search_action.triggered.connect(self.toggle_search_panel)
+            menubar.addAction(search_action)
+        except Exception:
+            self.search_action = None
     
     def apply_menu_bar_theme(self):
         """Apply theme-aware styling to menu bar"""
@@ -2314,6 +2419,90 @@ class YouTubeMusicExtractorGUI(QMainWindow):
         # This could be enhanced with actual animations
         self.log_output.append("🌟 Welcome to TrackOut!")
         self.log_output.append("✨ Modern, beautiful, and powerful music extraction")
+
+    def toggle_search_panel(self, *args):
+        """Open a popup Search dialog and focus its search box."""
+        # Small runtime log to help debug when toggle is invoked
+        try:
+            if hasattr(self, 'log_output'):
+                self.log_output.append("🔎 Search action triggered")
+        except Exception:
+            pass
+
+        if not SearchPanel:
+            try:
+                QMessageBox.warning(self, "Search Not Available", "Search UI could not be loaded.")
+            except Exception:
+                pass
+            return
+
+        # If a dialog already exists and is visible, bring it to front
+        dlg = getattr(self, '_search_dialog', None)
+        if dlg and dlg.isVisible():
+            try:
+                dlg.raise_()
+                dlg.activateWindow()
+            except Exception:
+                pass
+            try:
+                panel = getattr(dlg, 'search_panel', None)
+                if panel and hasattr(panel, 'search_input'):
+                    panel.search_input.setFocus()
+                    panel.search_input.selectAll()
+            except Exception:
+                pass
+            return
+
+        # Create a non-modal dialog containing a SearchPanel
+        try:
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Search")
+            dlg.setModal(False)
+            try:
+                dlg.setWindowModality(Qt.NonModal)
+            except Exception:
+                pass
+            dlg.resize(900, 700)
+
+            v = QVBoxLayout(dlg)
+            search_panel = SearchPanel(dark=not self.is_light_mode, parent=dlg)
+            v.addWidget(search_panel)
+            dlg.search_panel = search_panel
+
+            # store reference so subsequent clicks reuse it
+            self._search_dialog = dlg
+
+            # clear reference when closed
+            def _on_closed():
+                try:
+                    if hasattr(self, '_search_dialog'):
+                        delattr(self, '_search_dialog')
+                except Exception:
+                    try:
+                        del self._search_dialog
+                    except Exception:
+                        pass
+            try:
+                dlg.finished.connect(_on_closed)
+            except Exception:
+                pass
+
+            try:
+                search_panel.apply_theme(not self.is_light_mode)
+            except Exception:
+                pass
+
+            dlg.show()
+            try:
+                search_panel.search_input.setFocus()
+                search_panel.search_input.selectAll()
+            except Exception:
+                pass
+        except Exception as exc:
+            try:
+                QMessageBox.critical(self, "Search Error", f"Could not open Search dialog:\n{exc}")
+            except Exception:
+                pass
     
     # Event handlers
     def on_url_changed(self):

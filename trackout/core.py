@@ -275,21 +275,124 @@ def process_single_track(entry, album_folder, cover_art_path, album_title, track
                 audio['trkn'] = [(track_num, total_tracks or 0)]
             if 'upload_date' in entry:
                 audio['©day'] = [str(entry.get('upload_date', ''))[:4]]
+            cover_data = None
             if cover_art_path and os.path.exists(cover_art_path):
-                with open(cover_art_path, "rb") as f:
-                    cover_data = f.read()
+                # Always convert to JPEG bytes to avoid issues with WEBP/PNG inputs
                 try:
-                    audio['covr'] = [MP4Cover(cover_data, imageformat=MP4Cover.FORMAT_JPEG)]
+                    with Image.open(cover_art_path) as img:
+                        img = img.convert("RGB")
+                        buf = io.BytesIO()
+                        img.save(buf, format="JPEG", quality=95)
+                        cover_data = buf.getvalue()
                 except Exception:
-                    pass
-            audio.save()
-            folder_art_path = os.path.splitext(output_filename)[0] + ".jpg"
-            if cover_art_path and os.path.exists(cover_art_path):
-                try:
-                    shutil.copy2(cover_art_path, folder_art_path)
-                except Exception:
-                    pass
-            return True
+                    try:
+                        with open(cover_art_path, "rb") as f:
+                            cover_data = f.read()
+                    except Exception:
+                        cover_data = None
+
+                cover_saved = False
+                if cover_data and cover_art_path and os.path.exists(cover_art_path):
+                    # Try embedding cover art using mutagen first (in-memory JPEG)
+                    try:
+                        audio['covr'] = [MP4Cover(cover_data, imageformat=MP4Cover.FORMAT_JPEG)]
+                    except Exception as e:
+                        # Record failure to construct MP4Cover
+                        try:
+                            with open('trackout_embed.log', 'a', encoding='utf-8') as _lf:
+                                import traceback
+                                _lf.write(f"MP4Cover construction failed for {output_filename}: {e}\n")
+                                traceback.print_exc(file=_lf)
+                        except Exception:
+                            pass
+
+                    # Try saving changes via mutagen
+                    try:
+                        audio.save()
+                        cover_saved = True
+                    except Exception as e:
+                        try:
+                            with open('trackout_embed.log', 'a', encoding='utf-8') as _lf:
+                                import traceback
+                                _lf.write(f"audio.save() failed for {output_filename}: {e}\n")
+                                traceback.print_exc(file=_lf)
+                        except Exception:
+                            pass
+
+                else:
+                    # No cover data to embed
+                    try:
+                        audio.save()
+                    except Exception:
+                        # If even saving metadata without cover fails, log but continue
+                        try:
+                            with open('trackout_embed.log', 'a', encoding='utf-8') as _lf:
+                                import traceback
+                                _lf.write(f"audio.save() (no cover) failed for {output_filename}\n")
+                                traceback.print_exc(file=_lf)
+                        except Exception:
+                            pass
+
+                # If mutagen embedding failed, try FFmpeg as a fallback to attach the picture
+                if not cover_saved and cover_art_path and os.path.exists(cover_art_path):
+                    try:
+                        ff = _find_ffmpeg()
+                        if ff:
+                            tmp_out = output_filename + '.tmp.m4a'
+                            # Use ffmpeg to attach cover as an attached_pic
+                            cmd = [
+                                ff, '-y', '-i', output_filename, '-i', cover_art_path,
+                                '-map', '0', '-map', '1', '-c', 'copy', '-disposition:v:1', 'attached_pic', tmp_out
+                            ]
+                            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                            if proc.returncode == 0 and os.path.exists(tmp_out):
+                                try:
+                                    os.replace(tmp_out, output_filename)
+                                    cover_saved = True
+                                except Exception as e:
+                                    try:
+                                        with open('trackout_embed.log', 'a', encoding='utf-8') as _lf:
+                                            _lf.write(f"Failed replacing tmp file for {output_filename}: {e}\n")
+                                    except Exception:
+                                        pass
+                            else:
+                                try:
+                                    with open('trackout_embed.log', 'a', encoding='utf-8') as _lf:
+                                        _lf.write(f"FFmpeg embed failed for {output_filename}: rc={proc.returncode} stderr={proc.stderr.decode(errors='ignore')}\n")
+                                except Exception:
+                                    pass
+                        else:
+                            try:
+                                with open('trackout_embed.log', 'a', encoding='utf-8') as _lf:
+                                    _lf.write(f"FFmpeg not found for embedding cover into {output_filename}\n")
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        try:
+                            with open('trackout_embed.log', 'a', encoding='utf-8') as _lf:
+                                import traceback
+                                _lf.write(f"FFmpeg fallback exception for {output_filename}: {e}\n")
+                                traceback.print_exc(file=_lf)
+                        except Exception:
+                            pass
+
+                # Always copy a folder-level JPG next to the audio
+                folder_art_path = os.path.splitext(output_filename)[0] + ".jpg"
+                if cover_art_path and os.path.exists(cover_art_path):
+                    try:
+                        shutil.copy2(cover_art_path, folder_art_path)
+                    except Exception:
+                        pass
+
+                # Log if embedding ultimately failed so user can inspect trackout_embed.log
+                if cover_art_path and os.path.exists(cover_art_path) and not cover_saved:
+                    try:
+                        with open('trackout_embed.log', 'a', encoding='utf-8') as _lf:
+                            _lf.write(f"Cover art was NOT embedded into {output_filename} (cover file present: {cover_art_path})\n")
+                    except Exception:
+                        pass
+
+                return True
         except Exception:
             return False
     except Exception:
