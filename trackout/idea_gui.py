@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QFrame, QScrollArea, QSizePolicy,
     QAction, QMenuBar, QStatusBar, QButtonGroup, QMessageBox, QFileDialog
 )
-from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QUrl
+from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QUrl, QEvent
 from PyQt5.QtGui import QFont, QColor, QPalette, QIcon, QDesktopServices, QPixmap
 import urllib.request
 
@@ -117,7 +117,7 @@ QLabel#sectionTitle {
 /* The Container holding the grid cards */
 QWidget#resultsPanel {
     background-color: #120a12; /* Dark reddish/purple tint bg */
-    border: 1px solid #2a1f2a;
+    border: 1px solid #000000;
     border-radius: 20px;
 }
 
@@ -326,6 +326,7 @@ class SearchOutMainWindow(QMainWindow):
         self.setStyleSheet(STYLE_SHEET)
         self.dark_theme = True
         self.history = [] 
+        self.current_cards = []
         self.init_ui()
 
     def init_ui(self):
@@ -373,24 +374,25 @@ class SearchOutMainWindow(QMainWindow):
         
         # Main layout for the right side
         layout = QVBoxLayout(content_container)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(30)
+        layout.setContentsMargins(30, 30, 30, 30)  # outer padding around whole content area
+        layout.setSpacing(30)  # vertical spacing between search bar and results panel
 
         # --- 1. SEARCH BAR (Full Width) ---
         # Container to hold input and button
         search_container = QWidget()
         search_layout = QHBoxLayout(search_container)
         search_layout.setContentsMargins(0, 0, 0, 0)
-        search_layout.setSpacing(15)
+        search_layout.setSpacing(15)  # horizontal gap between search input and button
 
         self.search_input = QLineEdit()
         self.search_input.setObjectName("searchInput")
         self.search_input.setPlaceholderText("Search...")
-        self.search_input.setFixedHeight(50)
+        self.search_input.setFixedHeight(50)  # controls vertical size of the search input (affects overall bar height)
+        self.search_input.returnPressed.connect(self.start_search)
 
         self.search_btn = QPushButton("Search")
         self.search_btn.setProperty("class", "pinkGlowBtn")
-        self.search_btn.setFixedHeight(50)
+        self.search_btn.setFixedHeight(50)  # make button same height as input
         self.search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.search_btn.clicked.connect(self.start_search)
 
@@ -400,45 +402,64 @@ class SearchOutMainWindow(QMainWindow):
         layout.addWidget(search_container)
 
         # --- 2. SEARCH RESULTS PANEL ---
-        # We wrap the results in a "Panel" widget to give it the background color from the image
+        # Panel widget gets background/styling from QSS via objectName "resultsPanel"
         self.results_panel = QWidget()
         self.results_panel.setObjectName("resultsPanel")
         
         panel_layout = QVBoxLayout(self.results_panel)
-        panel_layout.setContentsMargins(20, 20, 20, 20)
+        panel_layout.setContentsMargins(30, 30, 30, 30)  # inner padding inside the results panel (space around header + grid)
         
-        # Title inside the panel
-        lbl = QLabel("Search Results")
-        lbl.setObjectName("sectionTitle")
-        panel_layout.addWidget(lbl)
+        # Title + meta row
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(10)
+
+        self.results_title_label = QLabel("Search Results")
+        self.results_title_label.setObjectName("sectionTitle")
+        header_row.addWidget(self.results_title_label)
+        header_row.addStretch()
+
+        self.results_meta_label = QLabel("Awaiting a search.")
+        self.results_meta_label.setStyleSheet("color: #888; font-size: 12px;")
+        header_row.addWidget(self.results_meta_label)
+
+        panel_layout.addLayout(header_row)
 
         # Scroll Area
-        scroll_area = QScrollArea()
-        scroll_area.setObjectName("resultsScrollArea")
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff) # Hide horizontal scroll
+        self.results_scroll_area = QScrollArea()
+        self.results_scroll_area.setObjectName("resultsScrollArea")
+        self.results_scroll_area.setWidgetResizable(True)  # lets the grid widget expand/contract with the viewport (important for reflowing cards)
+        self.results_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff) # hide horizontal scroll so cards wrap instead
 
         # Grid Container inside Scroll Area
         self.results_grid_widget = QWidget()
-        self.results_grid_widget.setStyleSheet("background: transparent;")
+        self.results_grid_widget.setStyleSheet("background: transparent;")  # transparent bg so panel bg shows through
         
-        # USE QGRIDLAYOUT HERE for the grid effect
+        # USE QGRIDLAYOUT HERE for the grid effect (this layout controls card placement)
         self.results_layout = QGridLayout(self.results_grid_widget)
-        self.results_layout.setContentsMargins(0, 10, 0, 0)
-        self.results_layout.setSpacing(12)
+        self.results_layout.setContentsMargins(0, 10, 0, 0)  # top margin between header and first row of cards
+        self.results_layout.setSpacing(18)  # spacing between individual cards (horizontal + vertical gap)
         # Keep results aligned to top
-        self.results_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.results_layout.setAlignment(Qt.AlignmentFlag.AlignTop)  # ensures cards start from top of the scroll area
 
         self.placeholder_label = QLabel("Enter a query above to find videos.")
         self.placeholder_label.setStyleSheet("color: #666; font-size: 14px;")
         self.results_layout.addWidget(self.placeholder_label, 0, 0)
 
-        scroll_area.setWidget(self.results_grid_widget)
-        panel_layout.addWidget(scroll_area)
+        self.results_scroll_area.setWidget(self.results_grid_widget)
+        panel_layout.addWidget(self.results_scroll_area)
+
+        # Keep layout responsive when the viewport resizes (triggers relayout_cards / eventFilter)
+        self.results_scroll_area.viewport().installEventFilter(self)
 
         layout.addWidget(self.results_panel)
 
         return content_container
+
+# Note: the actual per-card size is set inside ResultItemWidget:
+#     ResultItemWidget.__init__ -> self.setFixedSize(185, 180)
+# That fixedSize controls the visual size of each video card; combined with results_layout.setSpacing(...) and contentsMargins
+# it determines the spacing and wrapping of cards inside the grid.
 
     # ---------- Logic ----------
     def clear_results(self):
@@ -448,6 +469,7 @@ class SearchOutMainWindow(QMainWindow):
             widget = item.widget()
             if widget:
                 widget.deleteLater()
+        self.current_cards = []
 
     def start_search(self):
         query = self.search_input.text().strip()
@@ -457,6 +479,7 @@ class SearchOutMainWindow(QMainWindow):
         self.search_btn.setEnabled(False)
         self.search_btn.setText("...")
         self.clear_results()
+        self.results_meta_label.setText("Searching...")
         
         # Add loading text
         loading = QLabel("Searching...")
@@ -480,27 +503,22 @@ class SearchOutMainWindow(QMainWindow):
             lbl = QLabel("No results found.")
             lbl.setStyleSheet("color: #888;")
             self.results_layout.addWidget(lbl, 0, 0)
+            self.results_meta_label.setText("No results to display.")
             return
 
-        # --- GRID LOGIC ---
-        # Define how many columns we want
-        MAX_COLS = 6 
-        row = 0
-        col = 0
-
+        self.current_cards = []
         for video in videos:
-            # Create the Card Widget
             card = ResultItemWidget(video, self.open_in_browser, self.save_result)
-            
-            # Add to grid
-            self.results_layout.addWidget(card, row, col)
+            self.current_cards.append(card)
 
-            # Calculate next position
-            col += 1
-            if col >= MAX_COLS:
-                col = 0
-                row += 1
+        self.relayout_cards()
 
+        total_time = None
+        if isinstance(data, dict):
+            meta = data.get("search_metadata") or {}
+            total_time = meta.get("total_time_taken")
+        time_text = f" • {total_time}s" if total_time is not None else ""
+        self.results_meta_label.setText(f"Showing {len(videos)} results{time_text}")
         self.statusBar().showMessage(f"Found {len(videos)} results.")
 
     def handle_search_error(self, message: str):
@@ -510,6 +528,7 @@ class SearchOutMainWindow(QMainWindow):
         lbl = QLabel(f"Error: {message}")
         lbl.setStyleSheet("color: red;")
         self.results_layout.addWidget(lbl, 0, 0)
+        self.results_meta_label.setText("Something went wrong. Try again.")
 
     def apply_theme(self, dark: bool):
         """Apply dark or light stylesheet."""
@@ -523,6 +542,41 @@ class SearchOutMainWindow(QMainWindow):
     def toggle_theme(self):
         self.dark_theme = not getattr(self, "dark_theme", True)
         self.apply_theme(self.dark_theme)
+
+    def compute_max_cols(self) -> int:
+        """Compute how many columns fit in the current viewport."""
+        if not hasattr(self, "results_scroll_area"):
+            return 6
+        viewport_width = max(1, self.results_scroll_area.viewport().width())
+        card_width = 195  # card width + padding approximation
+        spacing = self.results_layout.spacing()
+        cols = max(2, min(6, viewport_width // (card_width + spacing)))
+        return cols
+
+    def relayout_cards(self):
+        """Reflow cards into the grid based on available width."""
+        if not self.current_cards:
+            return
+
+        for card in self.current_cards:
+            self.results_layout.removeWidget(card)
+
+        max_cols = self.compute_max_cols()
+        for idx, card in enumerate(self.current_cards):
+            row = idx // max_cols
+            col = idx % max_cols
+            self.results_layout.addWidget(card, row, col)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.relayout_cards()
+
+    def eventFilter(self, source, event):
+        if source is getattr(self, "results_scroll_area", None) and event.type() == QEvent.Resize:
+            self.relayout_cards()
+        if source is getattr(self, "results_scroll_area", None) and source is self.results_scroll_area.viewport() and event.type() == QEvent.Resize:
+            self.relayout_cards()
+        return super().eventFilter(source, event)
 
     def open_in_browser(self, data: dict):
         url = data.get("link")
@@ -551,6 +605,7 @@ class SearchOutMainWindow(QMainWindow):
             super().__init__(parent)
             self.setObjectName("searchPanel")
             self.dark = dark
+            self.current_cards = []
             self._build_ui()
 
         def _build_ui(self):
@@ -568,6 +623,7 @@ class SearchOutMainWindow(QMainWindow):
             self.search_input.setObjectName("searchInput")
             self.search_input.setPlaceholderText("Search...")
             self.search_input.setFixedHeight(40)
+            self.search_input.returnPressed.connect(self.start_search)
 
             self.search_btn = QPushButton("Search")
             self.search_btn.setProperty("class", "pinkGlowBtn")
@@ -585,13 +641,24 @@ class SearchOutMainWindow(QMainWindow):
             panel_layout = QVBoxLayout(self.results_panel)
             panel_layout.setContentsMargins(8, 8, 8, 8)
 
+            header_row = QHBoxLayout()
+            header_row.setContentsMargins(0, 0, 0, 0)
+            header_row.setSpacing(8)
+
             lbl = QLabel("Search Results")
             lbl.setObjectName("sectionTitle")
-            panel_layout.addWidget(lbl)
+            header_row.addWidget(lbl)
+            header_row.addStretch()
 
-            scroll_area = QScrollArea()
-            scroll_area.setWidgetResizable(True)
-            scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.results_meta_label = QLabel("Awaiting a search.")
+            self.results_meta_label.setStyleSheet("color: #888; font-size: 12px;")
+            header_row.addWidget(self.results_meta_label)
+
+            panel_layout.addLayout(header_row)
+
+            self.results_scroll_area = QScrollArea()
+            self.results_scroll_area.setWidgetResizable(True)
+            self.results_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
             self.results_grid_widget = QWidget()
             self.results_layout = QGridLayout(self.results_grid_widget)
@@ -603,8 +670,10 @@ class SearchOutMainWindow(QMainWindow):
             self.placeholder_label.setStyleSheet("color: #666; font-size: 13px;")
             self.results_layout.addWidget(self.placeholder_label, 0, 0)
 
-            scroll_area.setWidget(self.results_grid_widget)
-            panel_layout.addWidget(scroll_area)
+            self.results_scroll_area.setWidget(self.results_grid_widget)
+            panel_layout.addWidget(self.results_scroll_area)
+
+            self.results_scroll_area.viewport().installEventFilter(self)
 
             layout.addWidget(self.results_panel)
 
@@ -622,6 +691,7 @@ class SearchOutMainWindow(QMainWindow):
                 widget = item.widget()
                 if widget:
                     widget.deleteLater()
+            self.current_cards = []
 
         def start_search(self):
             query = self.search_input.text().strip()
@@ -635,6 +705,7 @@ class SearchOutMainWindow(QMainWindow):
             loading = QLabel("Searching...")
             loading.setStyleSheet("color: #ff66b3; font-size: 14px;")
             self.results_layout.addWidget(loading, 0, 0)
+            self.results_meta_label.setText("Searching...")
 
             self.search_worker = SearchWorker(query, limit=16)
             self.search_worker.results_ready.connect(self.handle_search_results)
@@ -651,19 +722,20 @@ class SearchOutMainWindow(QMainWindow):
                 lbl = QLabel("No results found.")
                 lbl.setStyleSheet("color: #888;")
                 self.results_layout.addWidget(lbl, 0, 0)
+                self.results_meta_label.setText("No results to display.")
                 return
 
-            MAX_COLS = 6
-            row = 0
-            col = 0
+            self.current_cards = []
             for video in videos:
                 card = ResultItemWidget(video, None, None)
-                self.results_layout.addWidget(card, row, col)
-                col += 1
-                if col >= MAX_COLS:
-                    col = 0
-                    row += 1
+                self.current_cards.append(card)
 
+            self.relayout_cards()
+
+            meta = data.get("search_metadata") if isinstance(data, dict) else {}
+            total_time = meta.get("total_time_taken") if isinstance(meta, dict) else None
+            time_text = f" • {total_time}s" if total_time is not None else ""
+            self.results_meta_label.setText(f"Showing {len(videos)} results{time_text}")
             self.status_label.setText(f"Found {len(videos)} results.")
 
         def handle_search_error(self, message: str):
@@ -673,6 +745,7 @@ class SearchOutMainWindow(QMainWindow):
             lbl = QLabel(f"Error: {message}")
             lbl.setStyleSheet("color: red;")
             self.results_layout.addWidget(lbl, 0, 0)
+            self.results_meta_label.setText("Something went wrong. Try again.")
 
         def apply_theme(self, dark: bool):
             self.dark = dark
@@ -681,6 +754,31 @@ class SearchOutMainWindow(QMainWindow):
                 self.setStyleSheet(STYLE_SHEET)
             else:
                 self.setStyleSheet(LIGHT_STYLE_SHEET)
+
+        def compute_max_cols(self) -> int:
+            if not hasattr(self, "results_scroll_area"):
+                return 6
+            viewport_width = max(1, self.results_scroll_area.viewport().width())
+            card_width = 195
+            spacing = self.results_layout.spacing()
+            return max(2, min(6, viewport_width // (card_width + spacing)))
+
+        def relayout_cards(self):
+            if not self.current_cards:
+                return
+            for card in self.current_cards:
+                self.results_layout.removeWidget(card)
+
+            cols = self.compute_max_cols()
+            for idx, card in enumerate(self.current_cards):
+                row = idx // cols
+                col = idx % cols
+                self.results_layout.addWidget(card, row, col)
+
+        def eventFilter(self, source, event):
+            if source is getattr(self, "results_scroll_area", None) and source is self.results_scroll_area.viewport() and event.type() == QEvent.Resize:
+                self.relayout_cards()
+            return super().eventFilter(source, event)
 
 
 
