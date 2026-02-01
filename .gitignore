@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Distribution / packaging
+*.egg-info/
+*.eggs/
+*.whl
+
+# IDEs and editors
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# ffmpeg bundle (if included during builds)
+ffmpeg/
+
+# Generated icons
+trackout/icon_converted.ico
+
+# Test / cache
+.pytest_cache/
